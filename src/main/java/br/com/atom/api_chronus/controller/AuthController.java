@@ -10,7 +10,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import br.com.atom.api_chronus.dto.LoginResponseDTO;
 import br.com.atom.api_chronus.dto.SessionStatusDTO;
-import br.com.atom.api_chronus.service.IdClassAuthService;
 import br.com.atom.api_chronus.service.SessionManager;
 import lombok.RequiredArgsConstructor;
 
