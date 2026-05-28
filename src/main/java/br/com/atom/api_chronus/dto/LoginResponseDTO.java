@@ -2,6 +2,7 @@ package br.com.atom.api_chronus.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -24,16 +25,16 @@ import lombok.NoArgsConstructor;
 * @Data — getters, setters, toString, equals, hashCode
 * @NoArgsConstructor — construtor vazio obrigatório para o Jackson
 */
+/**
+ * DTO da resposta de login do iDClass.
+ * { "session": "abc123xyz..." }
+ */
 @Data
 @NoArgsConstructor
+@AllArgsConstructor                        // ← adicionado
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class LoginResponseDTO {
 
-    /**
-    * Token de sessão retornado pelo relógio.
-    * Válido até o próximo logout ou timeout do equipamento.
-    * Será usado como cookie: Cookie: session={valor}
-    */
+    // Token de sessão — usado como: Cookie: session=abc123...
     private String session;
-
 }
