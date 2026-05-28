@@ -10,19 +10,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import br.com.atom.api_chronus.dto.PunchLogDTO;
-import br.com.atom.api_chronus.dto.PunchLogResponseDTO;
+import br.com.atom.api_chronus.dto.AfdLineDTO;
+import br.com.atom.api_chronus.dto.AfdResponseDTO;
 import br.com.atom.api_chronus.service.PunchLogService;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Controller REST para batidas de ponto do iDClass.
+ * Controller REST para registros de ponto do iDClass.
  *
  * Endpoints:
- *   GET /api/ponto                      → primeira página (NSR 1)
- *   GET /api/ponto?startNsr=51          → página a partir do NSR 51
- *   GET /api/ponto/todas                → todas as batidas (até 25k registros)
- *   GET /api/ponto/funcionario/{pis}    → batidas de um funcionário pelo PIS/CPF
+ *   GET /api/ponto                    → todas as batidas (AFD completo)
+ *   GET /api/ponto?initialNsr=100     → batidas a partir do NSR 100
+ *   GET /api/ponto/funcionario/{pis}  → batidas de um funcionário
  */
 @RestController
 @RequestMapping("/api/ponto")
@@ -33,19 +32,18 @@ public class PunchLogController {
 
     /**
      * GET /api/ponto
-     * GET /api/ponto?startNsr=51
+     * GET /api/ponto?initialNsr=100
      *
-     * Retorna uma página de batidas a partir do NSR informado.
-     * Use "next_nsr" da resposta como startNsr na próxima chamada.
+     * Retorna todas as batidas parseadas do AFD.
      *
-     * 200: { "punch_logs": [...], "total": 150, "next_nsr": 51 }
+     * 200: { "totalLinhas": 500, "totalBatidas": 498, "batidas": [...] }
      * 503: { "erro": "..." }
      */
     @GetMapping
-    public ResponseEntity<?> buscarPagina(
-            @RequestParam(required = false) Long startNsr) {
+    public ResponseEntity<?> buscarBatidas(
+            @RequestParam(required = false) Long initialNsr) {
 
-        PunchLogResponseDTO resultado = punchLogService.buscarPagina(startNsr);
+        AfdResponseDTO resultado = punchLogService.buscarBatidas(initialNsr);
 
         if (resultado != null) {
             return ResponseEntity.ok(resultado);
@@ -53,44 +51,23 @@ public class PunchLogController {
 
         return ResponseEntity
                 .status(503)
-                .body(Map.of("erro", "Não foi possível buscar as batidas de ponto"));
-    }
-
-    /**
-     * GET /api/ponto/todas
-     *
-     * Retorna todas as batidas percorrendo todas as páginas automaticamente.
-     * Use com critério — pode retornar até 25.000 registros.
-     *
-     * 200: [ {...batida1}, {...batida2}, ... ]
-     * 204: sem registros
-     */
-    @GetMapping("/todas")
-    public ResponseEntity<List<PunchLogDTO>> buscarTodas() {
-
-        List<PunchLogDTO> batidas = punchLogService.buscarTodas();
-
-        if (batidas.isEmpty()) {
-            return ResponseEntity.noContent().build();
-        }
-
-        return ResponseEntity.ok(batidas);
+                .body(Map.of("erro", "Não foi possível buscar os registros de ponto"));
     }
 
     /**
      * GET /api/ponto/funcionario/{pis}
      *
-     * Retorna as batidas de um funcionário pelo PIS ou CPF.
-     * Compatível com firmware pré-671 (PIS) e 671 (CPF).
+     * Retorna batidas de um funcionário pelo PIS ou CPF.
+     * Aceita com ou sem formatação: "12345678900" ou "123.456.789-00"
      *
-     * 200: [ {...batida1}, {...batida2} ]
-     * 204: nenhuma batida para este funcionário
+     * 200: [ { "nsr": 1853, "dateTime": "2026-05-30T18:02", ... } ]
+     * 204: nenhuma batida encontrada
      */
     @GetMapping("/funcionario/{pis}")
-    public ResponseEntity<List<PunchLogDTO>> buscarPorPis(
+    public ResponseEntity<List<AfdLineDTO>> buscarPorPis(
             @PathVariable String pis) {
 
-        List<PunchLogDTO> batidas = punchLogService.buscarPorPis(pis);
+        List<AfdLineDTO> batidas = punchLogService.buscarPorPis(pis);
 
         if (batidas.isEmpty()) {
             return ResponseEntity.noContent().build();

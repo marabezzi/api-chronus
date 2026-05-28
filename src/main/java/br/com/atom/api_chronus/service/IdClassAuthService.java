@@ -11,16 +11,19 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+
 /**
  * Serviço de autenticação com o relógio iDClass.
  *
- * Passo 1: login()        — faz o POST /login.fcgi e retorna o token
- * Passo 2: buildCookie()  — monta o header Cookie para uso nos requests
+ * O iDClass suporta dois modos de autenticação:
  *
- * Separação de responsabilidades:
- *   - IdClassAuthService → sabe como fazer login no relógio
- *   - SessionManager     → decide quando fazer login (gerência do TTL)
- *   - Demais services    → usam getSessionValida() sem saber dos detalhes
+ *   1. Cookie header:   Cookie: session=TOKEN
+ *      → usado em: login, session_is_valid, maioria dos endpoints
+ *
+ *   2. Query string:    /endpoint.fcgi?session=TOKEN
+ *      → obrigatório em: get_afd.fcgi e possivelmente outros
+ *
+ * Ambos os métodos são fornecidos por este serviço para uso nos services.
  */
 @Slf4j
 @Service
@@ -38,14 +41,13 @@ public class IdClassAuthService {
      */
     public LoginResponseDTO login() {
         try {
-            // Monta o corpo: {"login":"admin","password":"admin"}
             LoginRequestDTO loginRequest = new LoginRequestDTO(
                     config.getUser(),
                     config.getPassword()
             );
             String requestBody = objectMapper.writeValueAsString(loginRequest);
-
             String url = config.getBaseUrl() + "/login.fcgi";
+
             log.debug("Tentando login no relógio: {}", url);
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -78,19 +80,30 @@ public class IdClassAuthService {
     }
 
     /**
-     * Monta o valor do header Cookie para os requests ao relógio.
+     * Monta o header Cookie para endpoints que usam autenticação por cookie.
      *
-     * O iDClass exige que o token de sessão seja enviado como cookie:
-     *   Cookie: session=xYz9AbC...
+     * Uso:
+     *   request.header("Cookie", authService.buildCookie(session))
      *
-     * Uso nos próximos services:
-     *   String cookie = authService.buildCookie(sessionManager.getSessionValida());
-     *   HttpRequest.newBuilder().header("Cookie", cookie)...
-     *
-     * @param sessionToken token retornado pelo login
-     * @return string formatada para o header Cookie
+     * @param sessionToken token de sessão
+     * @return "session=TOKEN"
      */
     public String buildCookie(String sessionToken) {
         return "session=" + sessionToken;
+    }
+
+    /**
+     * Monta a URL completa com o session na query string.
+     * Obrigatório para: get_afd.fcgi e endpoints que não aceitam cookie.
+     *
+     * Uso:
+     *   String url = authService.buildUrlComSession("/get_afd.fcgi", session);
+     *
+     * @param endpoint ex: "/get_afd.fcgi"
+     * @param sessionToken token de sessão
+     * @return ex: "https://192.168.1.201:443/get_afd.fcgi?session=TOKEN"
+     */
+    public String buildUrlComSession(String endpoint, String sessionToken) {
+        return config.getBaseUrl() + endpoint + "?session=" + sessionToken;
     }
 }

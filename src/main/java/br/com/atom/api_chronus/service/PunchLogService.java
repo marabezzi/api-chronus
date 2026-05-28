@@ -13,25 +13,25 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import br.com.atom.api_chronus.config.IdClassConfig;
+import br.com.atom.api_chronus.dto.AfdLineDTO;
+import br.com.atom.api_chronus.dto.AfdResponseDTO;
 import br.com.atom.api_chronus.dto.PunchLogDTO;
 import br.com.atom.api_chronus.dto.PunchLogResponseDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Serviço para buscar registros de batidas de ponto do iDClass.
+ * Serviço para buscar e parsear registros de ponto do iDClass.
  *
- * Endpoint correto do iDClass (REP):  POST /get_mftr_log.fcgi
- * Autenticação:                       Cookie: session={token}
+ * Endpoint correto: POST /get_afd.fcgi?session=TOKEN
  *
- * IMPORTANTE — diferença entre produtos ControlID:
- *   iDAccess (Controle de Acesso) → /load_objects.fcgi com object=access_logs
- *   iDClass  (Relógio de Ponto)   → /get_mftr_log.fcgi   ← este serviço
+ * IMPORTANTE:
+ *   O iDClass exige o token na QUERY STRING para este endpoint.
+ *   Usar apenas o Cookie header resulta em 401 Invalid session.
+ *   Use authService.buildUrlComSession() que já monta a URL correta.
  *
- * Paginação via NSR (Número Sequencial de Registro):
- *   - Primeira chamada: startNsr = 1
- *   - Próximas chamadas: startNsr = nextNsr retornado pela resposta anterior
- *   - Fim: nextNsr = 0 ou ausente
+ * O retorno é o AFD — texto posicional fixo, Portaria 671/INMETRO.
+ * O AfdParserService converte cada linha em um objeto AfdLineDTO.
  */
 @Slf4j
 @Service
@@ -42,45 +42,36 @@ public class PunchLogService {
     private final HttpClient httpClient;
     private final SessionManager sessionManager;
     private final IdClassAuthService authService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-
-    /** Registros por página — recomendado pela documentação iDClass */
-    private static final int REGISTROS_POR_PAGINA = 50;
+    private final AfdParserService afdParser;
 
     /**
-     * Busca uma página de batidas de ponto a partir de um NSR inicial.
+     * Busca o AFD completo do relógio e retorna as batidas parseadas.
      *
-     * @param startNsr NSR de início da página (1 = começo, null = começo)
-     * @return página de batidas, ou null se houver erro de comunicação
+     * @param initialNsr NSR inicial (1 = do começo, null = do começo)
+     * @return AfdResponseDTO com metadados e lista de batidas
      */
-    public PunchLogResponseDTO buscarPagina(Long startNsr) {
+    public AfdResponseDTO buscarBatidas(Long initialNsr) {
         try {
-            // Obtém sessão válida — renova automaticamente se expirada
             String session = sessionManager.getSessionValida();
             if (session == null) {
-                log.error("Sem sessão válida para buscar batidas de ponto.");
+                log.error("Sem sessão válida para buscar AFD.");
                 return null;
             }
 
-            // NSR padrão: começa do primeiro registro
-            long nsr = (startNsr != null && startNsr > 0) ? startNsr : 1;
+            long nsr = (initialNsr != null && initialNsr > 0) ? initialNsr : 1;
 
-            // Monta o corpo: informa o NSR inicial e quantidade por página
-            // { "start_nsr": 1, "qty": 50 }
-            String bodyJson = String.format(
-                    "{\"start_nsr\":%d,\"qty\":%d}",
-                    nsr, REGISTROS_POR_PAGINA
-            );
+            // Corpo da requisição: NSR inicial
+            String body = String.format("{\"initial_nsr\":%d}", nsr);
 
-            String url = config.getBaseUrl() + "/get_mftr_log.fcgi";
-            log.debug("Buscando batidas. URL: {} | start_nsr: {}", url, nsr);
+            // URL com session na query string — obrigatório para get_afd.fcgi
+            String url = authService.buildUrlComSession("/get_afd.fcgi", session);
+
+            log.info("Buscando AFD. URL: {} | initial_nsr: {}", url, nsr);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    // Cookie de sessão obrigatório em todos os requests pós-login
-                    .header("Cookie", authService.buildCookie(session))
-                    .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
             HttpResponse<String> response = httpClient.send(
@@ -89,25 +80,27 @@ public class PunchLogService {
             );
 
             if (response.statusCode() == 200) {
-                PunchLogResponseDTO resultado = objectMapper.readValue(
-                        response.body(),
-                        PunchLogResponseDTO.class
+                String conteudoAfd = response.body();
+                log.info("AFD recebido. Tamanho: {} bytes.", conteudoAfd.length());
+
+                // Parseia o texto AFD em objetos Java
+                List<AfdLineDTO> batidas = afdParser.parsear(conteudoAfd);
+
+                return new AfdResponseDTO(
+                        conteudoAfd.split("\\r?\\n").length,
+                        batidas.size(),
+                        batidas
                 );
-                int total = resultado.getPunchLogs() != null
-                        ? resultado.getPunchLogs().size() : 0;
-                log.info("Batidas recebidas: {} | Próximo NSR: {}",
-                        total, resultado.getNextNsr());
-                return resultado;
             }
 
-            // Sessão expirou no meio da operação — força renovação
+            // Sessão expirou — força renovação para o próximo request
             if (response.statusCode() == 401 || response.statusCode() == 403) {
                 log.warn("Sessão rejeitada (HTTP {}). Renovando token...",
                         response.statusCode());
                 sessionManager.renovarTokenForcado();
             }
 
-            log.error("Erro ao buscar batidas. HTTP {}: {}",
+            log.error("Erro ao buscar AFD. HTTP {}: {}",
                     response.statusCode(), response.body());
             return null;
 
@@ -118,64 +111,27 @@ public class PunchLogService {
     }
 
     /**
-     * Busca TODAS as batidas percorrendo todas as páginas automaticamente.
+     * Busca batidas de um funcionário pelo PIS/CPF.
+     * Faz a busca completa e filtra em memória.
      *
-     * ATENÇÃO: o iDClass armazena até 25.000 registros.
-     * Para rotinas diárias, prefira buscarPagina() com controle de NSR.
-     *
-     * @return lista completa de batidas, ou lista vazia se houver erro
+     * @param pis PIS ou CPF do funcionário (com ou sem zeros à esquerda)
+     * @return lista de batidas do funcionário
      */
-    public List<PunchLogDTO> buscarTodas() {
-        List<PunchLogDTO> todas = new ArrayList<>();
-        Long startNsr = 1L;
-        int pagina = 1;
-
-        log.info("Iniciando busca completa de batidas de ponto...");
-
-        do {
-            PunchLogResponseDTO resultado = buscarPagina(startNsr);
-
-            if (resultado == null) {
-                log.warn("Falha na página {}. Retornando {} registros coletados.",
-                        pagina, todas.size());
-                break;
-            }
-
-            if (resultado.getPunchLogs() != null) {
-                todas.addAll(resultado.getPunchLogs());
-            }
-
-            log.debug("Página {} processada. Total acumulado: {}", pagina, todas.size());
-
-            // Avança para o próximo NSR — 0 significa fim dos registros
-            startNsr = resultado.getNextNsr();
-            pagina++;
-
-        } while (startNsr != null && startNsr > 0);
-
-        log.info("Busca completa. Total de batidas: {}", todas.size());
-        return todas;
-    }
-
-    /**
-     * Busca batidas de um usuário específico pelo PIS/CPF.
-     *
-     * O iDClass não filtra por usuário no get_mftr_log diretamente.
-     * Buscamos todas e filtramos em memória.
-     * Para grandes volumes, considere filtrar por data primeiro.
-     *
-     * @param pis PIS ou CPF do funcionário
-     * @return lista de batidas do usuário, ou lista vazia se não encontrar
-     */
-    public List<PunchLogDTO> buscarPorPis(String pis) {
+    public List<AfdLineDTO> buscarPorPis(String pis) {
         if (pis == null || pis.isBlank()) {
             return Collections.emptyList();
         }
 
-        return buscarTodas().stream()
-                // Compatível com firmware pré-671 (user_pis) e 671 (user_cpf)
-                .filter(log -> pis.equals(log.getUserPis()) || pis.equals(log.getUserCpf()))
+        AfdResponseDTO resultado = buscarBatidas(1L);
+        if (resultado == null || resultado.getBatidas() == null) {
+            return Collections.emptyList();
+        }
+
+        // Normaliza o PIS para 12 chars com zeros à esquerda para comparar
+        String pisNormalizado = String.format("%012d", Long.parseLong(pis.replaceAll("\\D", "")));
+
+        return resultado.getBatidas().stream()
+                .filter(b -> pisNormalizado.equals(b.getPis()))
                 .toList();
     }
-
 }
