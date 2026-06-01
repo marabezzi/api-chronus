@@ -194,4 +194,24 @@ public UsuarioDTO buscarPorNome(String nome) {
             .findFirst()
             .orElse(null);
 }
+
+   /**
+ * Busca um usuário pelo código de matrícula (campo registration).
+ *
+ * Exemplos da base:
+ *   registration=95  → PATRICIA APARECIDA ALVES
+ *   registration=79  → DONATA APARECIDA MARTINS GARCIA
+ *   registration=3   → CELIA REGINA TOLEDO RODOLFO
+ *   registration=9   → RENATA AMPHILO LOPES PIOVEZAN
+ *
+ * @param codigo código de matrícula
+ * @return UsuarioDTO se encontrado, ou null
+ */
+   public UsuarioDTO buscarPorCodigo(int codigo) {
+    return listarTodos().stream()
+            .filter(u -> u.getRegistration() != null
+                    && u.getRegistration() == codigo)
+            .findFirst()
+            .orElse(null);
+}
 }

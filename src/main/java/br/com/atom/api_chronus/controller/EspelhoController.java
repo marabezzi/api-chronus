@@ -134,4 +134,70 @@ public ResponseEntity<?> espelhoPorNome(
             .status(503)
             .body(Map.of("erro", "Não foi possível gerar o espelho de ponto"));
 }
+
+/**
+ * POST /api/espelho/codigo
+ *
+ * Gera o espelho de ponto buscando o funcionário pelo código de matrícula.
+ *
+ * Body:
+ * {
+ *   "codigo":      95,
+ *   "dataInicial": "01052026",
+ *   "dataFinal":   "31052026"
+ * }
+ *
+ * 200: EspelhoResponseDTO completo
+ * 404: funcionário não encontrado
+ * 400: parâmetros inválidos
+ */
+@PostMapping("/codigo")
+public ResponseEntity<?> espelhoPorCodigo(
+        @RequestBody Map<String, String> body) {
+
+    String codigoStr   = body.get("codigo");
+    String dataInicial = body.get("dataInicial");
+    String dataFinal   = body.get("dataFinal");
+
+    if (codigoStr == null || codigoStr.isBlank()
+            || dataInicial == null || dataFinal == null) {
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("erro",
+                        "Campos obrigatórios: codigo, dataInicial, dataFinal"));
+    }
+
+    int codigo;
+    try {
+        codigo = Integer.parseInt(codigoStr);
+    } catch (NumberFormatException e) {
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("erro", "Código deve ser numérico"));
+    }
+
+    // Busca o usuário pelo código de matrícula
+    UsuarioDTO usuario = usuarioService.buscarPorCodigo(codigo);
+    if (usuario == null) {
+        return ResponseEntity
+                .status(404)
+                .body(Map.of("erro",
+                        "Funcionário não encontrado com o código: " + codigo));
+    }
+
+    EspelhoRequestDTO request = new EspelhoRequestDTO();
+    request.setPis(usuario.getPisFormatado());
+    request.setDataInicial(dataInicial);
+    request.setDataFinal(dataFinal);
+
+    EspelhoResponseDTO espelho = espelhoService.gerar(request);
+
+    if (espelho != null) {
+        return ResponseEntity.ok(espelho);
+    }
+
+    return ResponseEntity
+            .status(503)
+            .body(Map.of("erro", "Não foi possível gerar o espelho de ponto"));
+}
 }
