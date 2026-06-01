@@ -12,40 +12,31 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 import br.com.atom.api_chronus.config.AfdtEmpresaConfig;
-import br.com.atom.api_chronus.dto.AfdLineDTO;
-import br.com.atom.api_chronus.dto.AfdResponseDTO;
 import br.com.atom.api_chronus.dto.AfdtRequestDTO;
+import br.com.atom.api_chronus.entity.AfdtGerado;
+import br.com.atom.api_chronus.entity.BatidaPonto;
+import br.com.atom.api_chronus.repository.AfdtGeradoRepository;
+import br.com.atom.api_chronus.repository.BatidaPontoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
  * Gera o AFDT — Arquivo-Fonte de Dados Tratado.
  *
+ * PASSO D: consulta o banco PostgreSQL em vez do relógio.
+ * O AFDT gerado também é salvo no banco (tabela afdt_gerados)
+ * para histórico e reenvio sem necessidade de regenerar.
+ *
  * Especificação: Portaria 1510/2009 MTE, Anexo I, seção 2.
- *
- * O AFDT é gerado pelo sistema (não pelo relógio) processando
- * as batidas do AFD e organizando-as por funcionário e jornada.
- *
- * Estrutura do arquivo gerado:
- *   - 1 registro tipo "1" (cabeçalho)
- *   - N registros tipo "2" (detalhe — uma linha por batida)
- *   - 1 registro tipo "9" (trailer)
- *
- * Regras aplicadas (conforme Portaria 1510):
- *   - Batidas agrupadas por PIS + data
- *   - Ordenadas cronologicamente
- *   - Alternância E/S: primeira = Entrada, segunda = Saída, etc.
- *   - Número sequencial E/S por jornada: E1/S1, E2/S2, etc.
- *   - Tipo de marcação = "O" (original eletrônico) para todas
- *   - Campo motivo vazio (sem desconsiderações ou inclusões manuais)
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AfdtGeneratorService {
 
-    private final PunchLogService punchLogService;
-    private final AfdtEmpresaConfig empresaConfig;
+    private final BatidaPontoRepository   batidaRepo;
+    private final AfdtGeradoRepository   afdtRepo;
+    private final AfdtEmpresaConfig      empresaConfig;
 
     private static final DateTimeFormatter FMT_DATA  =
             DateTimeFormatter.ofPattern("ddMMyyyy");
@@ -53,135 +44,90 @@ public class AfdtGeneratorService {
             DateTimeFormatter.ofPattern("HHmm");
 
     /**
-     * Gera o conteúdo completo do AFDT como string.
+     * Gera o AFDT a partir do banco de dados e salva o resultado.
      *
-     * @param request parâmetros de filtragem (período e PIS)
-     * @return string com o AFDT no formato posicional da Portaria 1510
+     * @param request parâmetros de filtragem
+     * @return conteúdo do AFDT como string
      */
-        public String gerar(AfdtRequestDTO request) {
-        log.info("Iniciando geração do AFDT...");
+    public String gerar(AfdtRequestDTO request) {
+        log.info("Gerando AFDT do banco...");
 
-        // 1. Busca todas as batidas do AFD
-        AfdResponseDTO afd = punchLogService.buscarBatidas(1L);
-        if (afd == null || afd.getBatidas() == null || afd.getBatidas().isEmpty()) {
-            log.error("Sem batidas disponíveis para gerar o AFDT.");
-            return null;
-        }
-
-        List<AfdLineDTO> batidas = afd.getBatidas();
-
-        // 2. Aplica filtro de período
-        batidas = filtrarPorPeriodo(batidas, request);
-
-        // 3. Aplica filtro de PIS
-        if (request.getPis() != null && !request.getPis().isBlank()) {
-            String pisFiltro = normalizarPis(request.getPis());
-            batidas = batidas.stream()
-                    .filter(b -> pisFiltro.equals(b.getPis()))
-                    .collect(Collectors.toList());
-        }
+        // ── 1. Busca batidas no banco ─────────────────────────────────────
+        List<BatidaPonto> batidas = buscarBatidasFiltradas(request);
 
         if (batidas.isEmpty()) {
-            log.warn("Nenhuma batida encontrada para os filtros informados.");
+            log.warn("Nenhuma batida no banco para os filtros. Execute /api/sync primeiro.");
             return null;
         }
 
-        // 4. Determina período real dos dados
+        // ── 2. Determina o período real ───────────────────────────────────
         LocalDateTime dtInicial = batidas.stream()
-                .map(AfdLineDTO::getDateTime)
-                .min(Comparator.naturalOrder())
-                .orElse(LocalDateTime.now());
+                .map(BatidaPonto::getDateTime)
+                .min(Comparator.naturalOrder()).orElse(LocalDateTime.now());
 
         LocalDateTime dtFinal = batidas.stream()
-                .map(AfdLineDTO::getDateTime)
-                .max(Comparator.naturalOrder())
-                .orElse(LocalDateTime.now());
+                .map(BatidaPonto::getDateTime)
+                .max(Comparator.naturalOrder()).orElse(LocalDateTime.now());
 
         LocalDateTime dtGeracao = LocalDateTime.now();
 
-        // 5. Monta o arquivo
-        StringBuilder sb       = new StringBuilder();
-        int           seq      = 1;          // sequencial de registro
-        int           totalDet = 0;          // contador de registros tipo 2
+        // ── 3. Monta o arquivo ────────────────────────────────────────────
+        StringBuilder sb  = new StringBuilder();
+        int seq      = 1;
+        int totalDet = 0;
 
-        // ── Cabeçalho (tipo 1) ────────────────────────────────────────────
-        sb.append(gerarCabecalho(seq++, dtInicial, dtFinal, dtGeracao));
-        sb.append("\n");
+        sb.append(gerarCabecalho(seq++, dtInicial, dtFinal, dtGeracao)).append("\n");
 
-        // ── Detalhes (tipo 2) — uma linha por batida ──────────────────────
-        // Agrupa por PIS + data para calcular sequencial E/S
-        Map<String, List<AfdLineDTO>> porPisEData = batidas.stream()
-                .sorted(Comparator.comparing(AfdLineDTO::getDateTime))
+        // Agrupa por PIS + data para sequencial E/S
+        Map<String, List<BatidaPonto>> porPisEData = batidas.stream()
+                .sorted(Comparator.comparing(BatidaPonto::getDateTime))
                 .collect(Collectors.groupingBy(
                         b -> b.getPis() + "_" + b.getDateTime().toLocalDate(),
                         LinkedHashMap::new,
                         Collectors.toList()
                 ));
 
-                for (Map.Entry<String, List<AfdLineDTO>> entry : porPisEData.entrySet()) {
-                    List<AfdLineDTO> jornada = entry.getValue();
-                
-                    int     seqES   = 1;
-                    boolean entrada = true;
-                
-                    for (int i = 0; i < jornada.size(); i++) {
-                        AfdLineDTO batida = jornada.get(i);
-                
-                        boolean ultimaBatida   = (i == jornada.size() - 1);
-                        boolean jornadaImpar   = (jornada.size() % 2 != 0);
-                        boolean deveDescartar  = ultimaBatida && jornadaImpar && entrada;
-                
-                        // Se a jornada tem número ímpar de batidas, a última
-                        // (que seria uma Entrada sem Saída correspondente) é desconsiderada
-                        // conforme Portaria 1510, seção 2.2, item b.
-                        String tipoMarcacao = deveDescartar ? "D" : (entrada ? "E" : "S");
-                        String motivo       = deveDescartar
-                                ? padDireita("MARCACAO SEM PAR - AGUARDANDO SAIDA", 100)
-                                : padDireita("", 100);
-                
-                        sb.append(gerarDetalheComMotivo(seq++, batida, tipoMarcacao, seqES, motivo));
-                        sb.append("\n");
-                        totalDet++;
-                
-                        if (!entrada || deveDescartar) {
-                            seqES++;
-                        }
-                        if (!deveDescartar) {
-                            entrada = !entrada;
-                        }
-                    }
-                }
+        for (List<BatidaPonto> jornada : porPisEData.values()) {
+            int     seqES  = 1;
+            boolean entrada = true;
 
-        // ── Trailer (tipo 9) ──────────────────────────────────────────────
-        sb.append(gerarTrailer(seq, totalDet));
-        sb.append("\n");
+            for (int i = 0; i < jornada.size(); i++) {
+                BatidaPonto batida    = jornada.get(i);
+                boolean ultimaBatida = (i == jornada.size() - 1);
+                boolean jornadaImpar = (jornada.size() % 2 != 0);
+                boolean descartar    = ultimaBatida && jornadaImpar && entrada;
 
-        log.info("AFDT gerado: {} registros de detalhe.", totalDet);
-        return sb.toString();
+                String tipoMarcacao = descartar ? "D" : (entrada ? "E" : "S");
+                String motivo = descartar
+                        ? padDireita("MARCACAO SEM PAR - AGUARDANDO SAIDA", 100)
+                        : padDireita("", 100);
+
+                sb.append(gerarDetalhe(seq++, batida, tipoMarcacao, seqES, motivo))
+                  .append("\n");
+                totalDet++;
+
+                if (!entrada || descartar) seqES++;
+                if (!descartar) entrada = !entrada;
+            }
+        }
+
+        sb.append(gerarTrailer(seq)).append("\n");
+
+        String conteudo = sb.toString();
+        log.info("AFDT gerado: {} registros.", totalDet);
+
+        // ── 4. Salva no banco para histórico ──────────────────────────────
+        salvarAfdt(request, conteudo, totalDet,
+                dtInicial.toLocalDate(), dtFinal.toLocalDate());
+
+        return conteudo;
     }
 
     // ── Montadores de linha ───────────────────────────────────────────────
 
-    /**
-     * Cabeçalho — tipo 1 (215 chars).
-     *
-     * Layout Portaria 1510, seção 2.1:
-     *   001-009 (9)  → sequencial
-     *   010     (1)  → tipo "1"
-     *   011     (1)  → tipo identificador "1"=CNPJ
-     *   012-025 (14) → CNPJ
-     *   026-037 (12) → CEI
-     *   038-187 (150)→ razão social
-     *   188-195 (8)  → data inicial ddmmaaaa
-     *   196-203 (8)  → data final ddmmaaaa
-     *   204-211 (8)  → data geração ddmmaaaa
-     *   212-215 (4)  → hora geração hhmm
-     */
     private String gerarCabecalho(int seq, LocalDateTime dtInicial,
                                    LocalDateTime dtFinal, LocalDateTime dtGeracao) {
-        return String.format("%-9s", padZero(seq, 9))
-                + "1"
-                + "1"
+        return padZero(seq, 9) + "1" + "1"
                 + padZero(empresaConfig.getCnpj(), 14)
                 + padZero(empresaConfig.getCei(), 12)
                 + padDireita(empresaConfig.getRazaoSocial(), 150)
@@ -191,110 +137,107 @@ public class AfdtGeneratorService {
                 + dtGeracao.format(FMT_HORA);
     }
 
-    /**
-     * Detalhe — tipo 2 (155 chars).
-     *
-     * Layout Portaria 1510, seção 2.2:
-     *   001-009 (9)   → sequencial
-     *   010     (1)   → tipo "2"
-     *   011-018 (8)   → data ddmmaaaa
-     *   019-022 (4)   → hora hhmm
-     *   023-034 (12)  → PIS
-     *   035-051 (17)  → nº fabricação REP
-     *   052     (1)   → tipo marcação E/S/D
-     *   053-054 (2)   → sequencial E/S da jornada
-     *   055     (1)   → tipo registro O/I/P
-     *   056-155 (100) → motivo (vazio para registros originais)
-     */
-    /**
-     * Detalhe tipo 2 — 155 chars.
-     * Agora aceita motivo variável para registros desconsiderados (tipo D).
-     */
-    private String gerarDetalheComMotivo(int seq, AfdLineDTO batida,
-        String tipoMarcacao, int seqES,
-        String motivo) {
-    return padZero(seq, 9)
-    + "2"
-    + batida.getDateTime().format(FMT_DATA)
-    + batida.getDateTime().format(FMT_HORA)
-    + padZero(batida.getPis(), 12)
-    + padZero(empresaConfig.getNumFabricacao(), 17)
-    + tipoMarcacao                      // E, S ou D
-    + padZero(seqES, 2)                // 01, 02...
-    + "O"                               // Original eletrônico
-    + motivo;                           // 100 chars
+    private String gerarDetalhe(int seq, BatidaPonto batida,
+                                 String tipoMarcacao, int seqES, String motivo) {
+        return padZero(seq, 9) + "2"
+                + batida.getDateTime().format(FMT_DATA)
+                + batida.getDateTime().format(FMT_HORA)
+                + padZero(batida.getPis(), 12)
+                + padZero(empresaConfig.getNumFabricacao(), 17)
+                + tipoMarcacao
+                + padZero(seqES, 2)
+                + "O"
+                + motivo;
     }
-    /**
-     * Trailer — tipo 9.
-     *
-     * Layout Portaria 1510, seção 2.3:
-     *   001-009 (9) → sequencial
-     *   010     (1) → tipo "9"
-     */
-    private String gerarTrailer(int seq, int totalDetalhes) {
-        // Inclui totalizador informativo após o tipo 9
+
+    private String gerarTrailer(int seq) {
         return padZero(seq, 9) + "9";
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
     /**
-     * Filtra batidas pelo período informado no request.
-     * Se não informado, retorna todas.
+     * Filtra batidas do banco conforme os parâmetros do request.
      */
-    private List<AfdLineDTO> filtrarPorPeriodo(List<AfdLineDTO> batidas,
-                                                AfdtRequestDTO request) {
-        LocalDate inicio = null;
-        LocalDate fim    = null;
-
+    private List<BatidaPonto> buscarBatidasFiltradas(AfdtRequestDTO request) {
+        // Usa variáveis final separadas para uso nas lambdas
+        final LocalDate[] datas = new LocalDate[2]; // [0]=inicio, [1]=fim
+    
         try {
-            if (request.getDataInicial() != null && !request.getDataInicial().isBlank()) {
-                inicio = LocalDate.parse(request.getDataInicial(),
-                        DateTimeFormatter.ofPattern("ddMMyyyy"));
-            }
-            if (request.getDataFinal() != null && !request.getDataFinal().isBlank()) {
-                fim = LocalDate.parse(request.getDataFinal(),
-                        DateTimeFormatter.ofPattern("ddMMyyyy"));
-            }
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("ddMMyyyy");
+            if (request.getDataInicial() != null && !request.getDataInicial().isBlank())
+                datas[0] = LocalDate.parse(request.getDataInicial(), fmt);
+            if (request.getDataFinal() != null && !request.getDataFinal().isBlank())
+                datas[1] = LocalDate.parse(request.getDataFinal(), fmt);
         } catch (Exception e) {
-            log.warn("Formato de data inválido — retornando sem filtro de período.");
-            return batidas;
+            log.warn("Datas inválidas no request — buscando sem filtro de período.");
         }
-
-        final LocalDate fInicio = inicio;
-        final LocalDate fFim    = fim;
-
-        return batidas.stream()
-                .filter(b -> {
-                    LocalDate data = b.getDateTime().toLocalDate();
-                    if (fInicio != null && data.isBefore(fInicio)) return false;
-                    if (fFim    != null && data.isAfter(fFim))     return false;
-                    return true;
-                })
-                .collect(Collectors.toList());
+    
+        final LocalDate inicio = datas[0];
+        final LocalDate fim    = datas[1];
+    
+        // Filtra por PIS se informado
+        final String pis;
+        if (request.getPis() != null && !request.getPis().isBlank()) {
+            pis = String.format("%012d",
+                    Long.parseLong(request.getPis().replaceAll("\\D", "")));
+        } else {
+            pis = null;
+        }
+    
+        // Busca com filtros disponíveis
+        if (pis != null && inicio != null && fim != null) {
+            return batidaRepo.findByPisAndDateTimeBetweenOrderByDateTimeAsc(
+                    pis,
+                    inicio.atStartOfDay(),
+                    fim.atTime(23, 59, 59));
+        } else if (inicio != null && fim != null) {
+            return batidaRepo.findAll().stream()
+                    .filter(b -> !b.getDateTime().toLocalDate().isBefore(inicio)
+                              && !b.getDateTime().toLocalDate().isAfter(fim))
+                    .sorted(Comparator.comparing(BatidaPonto::getDateTime))
+                    .toList();
+        } else if (pis != null) {
+            return batidaRepo.findByPisOrderByDateTimeAsc(pis);
+        }
+    
+        return batidaRepo.findAll().stream()
+                .sorted(Comparator.comparing(BatidaPonto::getDateTime))
+                .toList();
     }
 
-    /** Normaliza PIS removendo não-dígitos e preenchendo com zeros à esquerda */
-    private String normalizarPis(String pis) {
-        String soDigitos = pis.replaceAll("\\D", "");
-        return String.format("%012d", Long.parseLong(soDigitos));
+    /**
+     * Salva o AFDT gerado no banco para histórico.
+     */
+    private void salvarAfdt(AfdtRequestDTO request, String conteudo,
+                             int total, LocalDate inicio, LocalDate fim) {
+        try {
+            AfdtGerado entity = new AfdtGerado();
+            entity.setDataGeracao(LocalDateTime.now());
+            entity.setDataInicial(inicio);
+            entity.setDataFinal(fim);
+            entity.setPis(request.getPis());
+            entity.setConteudo(conteudo);
+            entity.setTotalRegistros(total);
+            afdtRepo.save(entity);
+            log.debug("AFDT salvo no banco com {} registros.", total);
+        } catch (Exception e) {
+            log.warn("Não foi possível salvar o AFDT no banco: {}", e.getMessage());
+        }
     }
 
-    /** Preenche com zeros à esquerda até o tamanho desejado */
     private String padZero(long valor, int tamanho) {
         return String.format("%0" + tamanho + "d", valor);
     }
 
-    /** Preenche string com zeros à esquerda */
     private String padZero(String valor, int tamanho) {
         if (valor == null) valor = "";
-        valor = valor.replaceAll("\\D", ""); // mantém só dígitos
+        valor = valor.replaceAll("\\D", "");
         return String.format("%0" + tamanho + "d",
-                valor.isEmpty() ? 0 : Long.parseLong(valor.substring(0,
-                        Math.min(valor.length(), 18))));
+                valor.isEmpty() ? 0 : Long.parseLong(
+                        valor.substring(0, Math.min(valor.length(), 18))));
     }
 
-    /** Preenche com espaços à direita até o tamanho desejado */
     private String padDireita(String valor, int tamanho) {
         if (valor == null) valor = "";
         if (valor.length() > tamanho) valor = valor.substring(0, tamanho);

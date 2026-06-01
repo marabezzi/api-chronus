@@ -33,4 +33,11 @@ public interface BatidaPontoRepository extends JpaRepository<BatidaPonto, Long> 
 
     /** Total de batidas no banco */
     long count();
+
+     /**
+     * Busca batidas por período (sem filtro de PIS).
+     * Útil para gerar AFDT de todos os funcionários em um período.
+     */
+    List<BatidaPonto> findByDateTimeBetweenOrderByDateTimeAsc(
+        LocalDateTime inicio, LocalDateTime fim);
 }

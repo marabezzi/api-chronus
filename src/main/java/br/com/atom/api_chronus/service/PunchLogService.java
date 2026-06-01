@@ -1,137 +1,125 @@
 package br.com.atom.api_chronus.service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.util.ArrayList;
+
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 
-import br.com.atom.api_chronus.config.IdClassConfig;
 import br.com.atom.api_chronus.dto.AfdLineDTO;
 import br.com.atom.api_chronus.dto.AfdResponseDTO;
-import br.com.atom.api_chronus.dto.PunchLogDTO;
-import br.com.atom.api_chronus.dto.PunchLogResponseDTO;
+import br.com.atom.api_chronus.entity.BatidaPonto;
+import br.com.atom.api_chronus.repository.BatidaPontoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Serviço para buscar e parsear registros de ponto do iDClass.
+ * Serviço para buscar batidas de ponto.
  *
- * Endpoint correto: POST /get_afd.fcgi?session=TOKEN
+ * PASSO D: consulta o banco de dados PostgreSQL em vez do relógio.
+ * O relógio só é acessado via SyncService (/api/sync).
  *
- * IMPORTANTE:
- *   O iDClass exige o token na QUERY STRING para este endpoint.
- *   Usar apenas o Cookie header resulta em 401 Invalid session.
- *   Use authService.buildUrlComSession() que já monta a URL correta.
- *
- * O retorno é o AFD — texto posicional fixo, Portaria 671/INMETRO.
- * O AfdParserService converte cada linha em um objeto AfdLineDTO.
+ * Vantagens:
+ *   - Resposta instantânea (banco local vs HTTPS ao relógio)
+ *   - Funciona offline (relógio desligado ou inacessível)
+ *   - Não sobrecarrega o equipamento
+ *   - Permite filtros mais complexos via JPA
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PunchLogService {
 
-    private final IdClassConfig config;
-    private final HttpClient httpClient;
-    private final SessionManager sessionManager;
-    private final IdClassAuthService authService;
-    private final AfdParserService afdParser;
+    private final BatidaPontoRepository batidaRepo;
 
     /**
-     * Busca o AFD completo do relógio e retorna as batidas parseadas.
+     * Busca todas as batidas do banco.
+     * Substitui a chamada ao get_afd.fcgi do relógio.
      *
-     * @param initialNsr NSR inicial (1 = do começo, null = do começo)
-     * @return AfdResponseDTO com metadados e lista de batidas
+     * @param initialNsr ignorado — mantido para compatibilidade
+     * @return AfdResponseDTO com todas as batidas do banco
      */
     public AfdResponseDTO buscarBatidas(Long initialNsr) {
-        try {
-            String session = sessionManager.getSessionValida();
-            if (session == null) {
-                log.error("Sem sessão válida para buscar AFD.");
-                return null;
-            }
+        log.debug("Buscando batidas do banco de dados...");
 
-            long nsr = (initialNsr != null && initialNsr > 0) ? initialNsr : 1;
+        List<BatidaPonto> batidas = batidaRepo.findAll();
 
-            // Corpo da requisição: NSR inicial
-            String body = String.format("{\"initial_nsr\":%d}", nsr);
-
-            // URL com session na query string — obrigatório para get_afd.fcgi
-            String url = authService.buildUrlComSession("/get_afd.fcgi", session);
-
-            log.info("Buscando AFD. URL: {} | initial_nsr: {}", url, nsr);
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(
-                    request,
-                    HttpResponse.BodyHandlers.ofString()
-            );
-
-            if (response.statusCode() == 200) {
-                String conteudoAfd = response.body();
-                log.info("AFD recebido. Tamanho: {} bytes.", conteudoAfd.length());
-
-                // Parseia o texto AFD em objetos Java
-                List<AfdLineDTO> batidas = afdParser.parsear(conteudoAfd);
-
-                return new AfdResponseDTO(
-                        conteudoAfd.split("\\r?\\n").length,
-                        batidas.size(),
-                        batidas
-                );
-            }
-
-            // Sessão expirou — força renovação para o próximo request
-            if (response.statusCode() == 401 || response.statusCode() == 403) {
-                log.warn("Sessão rejeitada (HTTP {}). Renovando token...",
-                        response.statusCode());
-                sessionManager.renovarTokenForcado();
-            }
-
-            log.error("Erro ao buscar AFD. HTTP {}: {}",
-                    response.statusCode(), response.body());
-            return null;
-
-        } catch (Exception e) {
-            log.error("Erro de comunicação com o relógio: {}", e.getMessage(), e);
-            return null;
+        if (batidas.isEmpty()) {
+            log.warn("Nenhuma batida no banco. Execute /api/sync/batidas primeiro.");
+            return new AfdResponseDTO(0, 0, Collections.emptyList());
         }
+
+        // Converte entidades para DTOs
+        List<AfdLineDTO> dtos = batidas.stream()
+                .map(this::toDto)
+                .toList();
+
+        log.debug("Batidas encontradas no banco: {}", dtos.size());
+        return new AfdResponseDTO(dtos.size(), dtos.size(), dtos);
     }
 
     /**
-     * Busca batidas de um funcionário pelo PIS/CPF.
-     * Faz a busca completa e filtra em memória.
+     * Busca batidas de um funcionário pelo PIS.
      *
-     * @param pis PIS ou CPF do funcionário (com ou sem zeros à esquerda)
+     * @param pis PIS com ou sem zeros à esquerda
      * @return lista de batidas do funcionário
      */
     public List<AfdLineDTO> buscarPorPis(String pis) {
-        if (pis == null || pis.isBlank()) {
-            return Collections.emptyList();
-        }
+        if (pis == null || pis.isBlank()) return Collections.emptyList();
 
-        AfdResponseDTO resultado = buscarBatidas(1L);
-        if (resultado == null || resultado.getBatidas() == null) {
-            return Collections.emptyList();
-        }
+        String pisNorm = normalizarPis(pis);
+        log.debug("Buscando batidas do banco para PIS: {}", pisNorm);
 
-        // Normaliza o PIS para 12 chars com zeros à esquerda para comparar
-        String pisNormalizado = String.format("%012d", Long.parseLong(pis.replaceAll("\\D", "")));
-
-        return resultado.getBatidas().stream()
-                .filter(b -> pisNormalizado.equals(b.getPis()))
+        return batidaRepo.findByPisOrderByDateTimeAsc(pisNorm)
+                .stream()
+                .map(this::toDto)
                 .toList();
+    }
+
+    /**
+     * Busca batidas de um funcionário em um período.
+     *
+     * @param pis   PIS do funcionário
+     * @param inicio início do período
+     * @param fim   fim do período
+     * @return lista de batidas no período
+     */
+    public List<AfdLineDTO> buscarPorPisEPeriodo(String pis,
+                                                  LocalDateTime inicio,
+                                                  LocalDateTime fim) {
+        String pisNorm = normalizarPis(pis);
+        log.debug("Buscando batidas do banco. PIS: {} | {} a {}", pisNorm, inicio, fim);
+
+        return batidaRepo.findByPisAndDateTimeBetweenOrderByDateTimeAsc(
+                        pisNorm, inicio, fim)
+                .stream()
+                .map(this::toDto)
+                .toList();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Converte entidade BatidaPonto para AfdLineDTO.
+     * Mantém compatibilidade com os serviços que usam AfdLineDTO.
+     */
+    private AfdLineDTO toDto(BatidaPonto entity) {
+        return new AfdLineDTO(
+                entity.getNsr(),
+                entity.getDateTime(),
+                entity.getTipo(),
+                entity.getTipoDescricao(),
+                entity.getPis(),
+                entity.getLinhaOriginal()
+        );
+    }
+
+    private String normalizarPis(String pis) {
+        if (pis == null) return "000000000000";
+        String soDigitos = pis.replaceAll("\\D", "");
+        if (soDigitos.isEmpty()) return "000000000000";
+        return String.format("%012d", Long.parseLong(soDigitos));
     }
 }
