@@ -5,6 +5,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -17,6 +19,7 @@ import br.com.atom.api_chronus.dto.EspelhoDiaDTO;
 import br.com.atom.api_chronus.dto.EspelhoMarcacaoDTO;
 import br.com.atom.api_chronus.dto.EspelhoRequestDTO;
 import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
+import br.com.atom.api_chronus.dto.EspelhoSemanaDTO;
 import br.com.atom.api_chronus.entity.BatidaPonto;
 import br.com.atom.api_chronus.entity.UsuarioPonto;
 import br.com.atom.api_chronus.repository.BatidaPontoRepository;
@@ -160,12 +163,13 @@ public class EspelhoService {
 
         // ── 7. Retorna o espelho ──────────────────────────────────────────
         return new EspelhoResponseDTO(
-                pis, nome,
-                inicio.format(FMT_ISO),
-                fim.format(FMT_ISO),
-                dias,
-                dias.size(),
-                formatarMinutos(totalMinutos)
+         pis, nome,
+         inicio.format(FMT_ISO),
+         fim.format(FMT_ISO),
+         dias,
+         dias.size(),
+         formatarMinutos(totalMinutos),
+         calcularSemanas(dias)   // ← novo
         );
     }
 
@@ -189,4 +193,64 @@ public class EspelhoService {
         return data.getDayOfWeek()
                 .getDisplayName(TextStyle.FULL, Locale.of("pt", "BR"));
     }
+
+
+    /**
+ * Agrupa os dias por semana ISO (segunda a domingo) e calcula
+ * total de horas, dias trabalhados e média diária por semana.
+ *
+ * A semana é identificada pelo primeiro e último dia com ponto
+ * dentro da semana ISO: "Seg DD/MM - Dom DD/MM".
+ */
+private List<EspelhoSemanaDTO> calcularSemanas(List<EspelhoDiaDTO> dias) {
+    if (dias == null || dias.isEmpty()) return Collections.emptyList();
+
+    // Agrupa dias pelo número da semana ISO do ano
+    // Ex: semana ISO 19 de 2026 = todos os dias dessa semana
+    Map<String, List<EspelhoDiaDTO>> porSemana = new LinkedHashMap<>();
+
+    for (EspelhoDiaDTO dia : dias) {
+        LocalDate data = LocalDate.parse(dia.getData(), FMT_ISO);
+
+        // Calcula segunda e domingo da semana ISO deste dia
+        LocalDate segunda = data.with(
+                java.time.temporal.TemporalAdjusters
+                        .previousOrSame(java.time.DayOfWeek.MONDAY));
+        LocalDate domingo = segunda.plusDays(6);
+
+        // Chave: "Seg DD/MM - Dom DD/MM"
+        String chave = "Seg " + segunda.format(DateTimeFormatter.ofPattern("dd/MM"))
+                + " - Dom " + domingo.format(DateTimeFormatter.ofPattern("dd/MM"));
+
+        porSemana.computeIfAbsent(chave, k -> new ArrayList<>()).add(dia);
+    }
+
+    // Monta o DTO de cada semana
+    List<EspelhoSemanaDTO> semanas = new ArrayList<>();
+
+    for (Map.Entry<String, List<EspelhoDiaDTO>> entry : porSemana.entrySet()) {
+        String              chave     = entry.getKey();
+        List<EspelhoDiaDTO> diasSem   = entry.getValue();
+
+        // Soma os minutos trabalhados na semana
+        int totalMin = diasSem.stream()
+                .mapToInt(d -> {
+                    String[] p = d.getTotalTrabalhado().split(":");
+                    return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
+                })
+                .sum();
+
+        int diasTrabalhados = diasSem.size();
+        int mediaMin        = diasTrabalhados > 0 ? totalMin / diasTrabalhados : 0;
+
+        semanas.add(new EspelhoSemanaDTO(
+                chave,
+                diasTrabalhados,
+                formatarMinutos(totalMin),
+                formatarMinutos(mediaMin)
+        ));
+    }
+
+    return semanas;
+}
 }

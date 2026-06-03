@@ -23,6 +23,11 @@ import lombok.NoArgsConstructor;
  *   "totalHorasTrabalhadas": "176:40"
  * }
  */
+
+/**
+ * Resposta completa do Espelho de Ponto.
+ * Inclui resumo semanal além dos dados diários.
+ */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -54,4 +59,7 @@ public class EspelhoResponseDTO {
      * Soma de todos os dias.
      */
     private String totalHorasTrabalhadas;
+
+      /** Resumo por semana — calculado a partir dos dias */
+      private List<EspelhoSemanaDTO> semanas;
 }

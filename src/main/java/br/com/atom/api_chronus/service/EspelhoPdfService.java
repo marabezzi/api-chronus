@@ -4,6 +4,7 @@ import br.com.atom.api_chronus.config.AfdtEmpresaConfig;
 import br.com.atom.api_chronus.dto.EspelhoDiaDTO;
 import br.com.atom.api_chronus.dto.EspelhoMarcacaoDTO;
 import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
+import br.com.atom.api_chronus.dto.EspelhoSemanaDTO;
 import com.lowagie.text.Document;
 import com.lowagie.text.DocumentException;
 import com.lowagie.text.Element;
@@ -32,13 +33,13 @@ import java.util.List;
 /**
  * Gera o PDF do Espelho de Ponto conforme Anexo II da Portaria 1510/MTE.
  *
- * Layout oficial:
+ * Seções:
  *   1. Cabeçalho: empregador, endereço, empregado, PIS, emissão
  *   2. Horários contratuais (tabela vazia — não gerenciado pelo REP)
  *   3. Período de apuração
- *   4. Tabela principal:
- *      Dia | Marcações brutas | Jornada realizada (E/S pares) | CH | Tratamentos
- *   5. Totalizadores
+ *   4. Tabela principal: Dia | Marcações | Jornada | Total
+ *   5. Totalizadores do período
+ *   6. Resumo semanal: semana | dias | total horas | média diária
  */
 @Slf4j
 @Service
@@ -60,7 +61,7 @@ public class EspelhoPdfService {
 
     // ── Fontes ─────────────────────────────────────────────────────────────
     private static final Font F_TITULO =
-            FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11, AZUL_ESCURO);
+            FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11, BRANCO);
     private static final Font F_LABEL =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, AZUL_ESCURO);
     private static final Font F_VALOR =
@@ -87,28 +88,47 @@ public class EspelhoPdfService {
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 16, BRANCO);
     private static final Font F_RODAPE =
             FontFactory.getFont(FontFactory.HELVETICA, 6, Color.GRAY);
+    private static final Font F_SEC_TITULO =
+            FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, BRANCO);
 
     /**
      * Gera o PDF do espelho conforme Portaria 1510/MTE Anexo II.
+     *
+     * @param espelho dados gerados pelo EspelhoService
+     * @return bytes do PDF pronto para download
      */
     public byte[] gerar(EspelhoResponseDTO espelho) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-           // Troque A4.rotate() por A4 normal
-Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
+            Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
             PdfWriter writer = PdfWriter.getInstance(doc, out);
             writer.setPageEvent(new RodapePagina(espelho));
             doc.open();
 
+            // ── 1. Cabeçalho ──────────────────────────────────────────────
             doc.add(gerarCabecalho(espelho));
             doc.add(new Paragraph(" "));
+
+            // ── 2. Horários contratuais ───────────────────────────────────
             doc.add(gerarHorariosContratuais());
             doc.add(new Paragraph(" "));
+
+            // ── 3. Período ────────────────────────────────────────────────
             doc.add(gerarPeriodo(espelho));
             doc.add(new Paragraph(" "));
+
+            // ── 4. Tabela principal ───────────────────────────────────────
             doc.add(gerarTabelaPrincipal(espelho));
             doc.add(new Paragraph(" "));
+
+            // ── 5. Totalizadores ──────────────────────────────────────────
             doc.add(gerarTotalizadores(espelho));
+
+            // ── 6. Resumo semanal ─────────────────────────────────────────
+            if (espelho.getSemanas() != null && !espelho.getSemanas().isEmpty()) {
+                doc.add(new Paragraph(" "));
+                doc.add(gerarResumoSemanal(espelho));
+            }
 
             doc.close();
             log.info("PDF espelho gerado: {} | {} a {}",
@@ -131,6 +151,7 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         PdfPTable t = new PdfPTable(1);
         t.setWidthPercentage(100);
 
+        // Barra de título
         PdfPCell titulo = celula(
                 "RELATORIO ESPELHO DE PONTO ELETRONICO",
                 F_TITULO, Element.ALIGN_CENTER);
@@ -139,19 +160,20 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         titulo.setBorder(0);
         t.addCell(titulo);
 
+        // Dados em 4 colunas: label | valor | label | valor
         PdfPTable dados = new PdfPTable(4);
         dados.setWidthPercentage(100);
         dados.setWidths(new float[]{1.2f, 3f, 1.2f, 3f});
 
-        addDado(dados, "Empregador:",  empresaConfig.getRazaoSocial());
-        addDado(dados, "CNPJ:",        formatCnpj(empresaConfig.getCnpj()));
-        addDado(dados, "Endereco:",    nvl(empresaConfig.getLocal()));
-        addDado(dados, "Emitido em:",  LocalDateTime.now().format(
+        addDado(dados, "Empregador:", empresaConfig.getRazaoSocial());
+        addDado(dados, "CNPJ:",       formatCnpj(empresaConfig.getCnpj()));
+        addDado(dados, "Endereco:",   nvl(empresaConfig.getLocal()));
+        addDado(dados, "Emitido em:", LocalDateTime.now().format(
                 DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
-        addDado(dados, "Empregado:",   espelho.getNome());
-        addDado(dados, "PIS:",         espelho.getPis());
-        addDado(dados, "Admissao:",    "-");
-        addDado(dados, "Matricula:",   "-");
+        addDado(dados, "Empregado:",  espelho.getNome());
+        addDado(dados, "PIS:",        espelho.getPis());
+        addDado(dados, "Admissao:",   "-");
+        addDado(dados, "Matricula:",  "-");
 
         PdfPCell cDados = new PdfPCell(dados);
         cDados.setBackgroundColor(AZUL_CLARO);
@@ -170,13 +192,16 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         t.setWidthPercentage(100);
         t.setWidths(new float[]{1.5f, 1.5f, 1.5f, 1.5f, 1.5f});
 
-        PdfPCell titulo = celula("HORARIOS CONTRATUAIS DO EMPREGADO",
-                F_CAB_TAB_DARK, Element.ALIGN_LEFT);
+        // Título da seção
+        PdfPCell titulo = new PdfPCell(
+                new Phrase("HORARIOS CONTRATUAIS DO EMPREGADO", F_SEC_TITULO));
         titulo.setColspan(5);
-        titulo.setBackgroundColor(CINZA_CLARO);
+        titulo.setBackgroundColor(AZUL_ESCURO);
         titulo.setPadding(4);
+        titulo.setBorderColor(BRANCO);
         t.addCell(titulo);
 
+        // Cabeçalho
         for (String cab : new String[]{
                 "Cod. Horario (CH)", "Entrada", "Saida", "Entrada", "Saida"}) {
             PdfPCell c = celula(cab, F_CAB_TAB, Element.ALIGN_CENTER);
@@ -185,6 +210,7 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
             t.addCell(c);
         }
 
+        // Linhas vazias — CH não gerenciado pelo REP
         for (int i = 0; i < 2; i++) {
             for (int j = 0; j < 5; j++) {
                 PdfPCell c = celula("-", F_CELULA, Element.ALIGN_CENTER);
@@ -211,9 +237,10 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         label.setPadding(5);
         t.addCell(label);
 
-        String periodo = "De " + formatData(espelho.getDataInicial())
-                + " ate " + formatData(espelho.getDataFinal());
-        PdfPCell val = celula(periodo, F_VALOR, Element.ALIGN_LEFT);
+        PdfPCell val = celula(
+                "De " + formatData(espelho.getDataInicial())
+                + " ate " + formatData(espelho.getDataFinal()),
+                F_VALOR, Element.ALIGN_LEFT);
         val.setBackgroundColor(AZUL_CLARO);
         val.setPadding(5);
         t.addCell(val);
@@ -224,85 +251,86 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
     // ── 4. Tabela principal ───────────────────────────────────────────────
 
     private PdfPTable gerarTabelaPrincipal(EspelhoResponseDTO espelho)
-        throws DocumentException {
+            throws DocumentException {
 
-    // 10 colunas — cabe em A4 portrait
-    PdfPTable t = new PdfPTable(10);
-    t.setWidthPercentage(100);
-    t.setWidths(new float[]{
-            1.0f,                    // Dia
-            1.0f, 1.0f, 1.0f, 1.0f, // Marcacoes H1 H2 H3 H4
-            1.0f, 1.0f, 1.0f, 1.0f, // Jornada E1/S1/E2/S2
-            1.2f                     // Total trabalhado
-    });
+        // 10 colunas — cabe em A4 portrait
+        PdfPTable t = new PdfPTable(10);
+        t.setWidthPercentage(100);
+        t.setWidths(new float[]{
+                1.0f,                    // Dia
+                1.0f, 1.0f, 1.0f, 1.0f, // Marcacoes H1 H2 H3 H4
+                1.0f, 1.0f, 1.0f, 1.0f, // Jornada E1/S1/E2/S2
+                1.2f                     // Total trabalhado
+        });
 
-    // Cabeçalhos de grupo
-    addCabGrupo(t, "DIA",                              1, AZUL_ESCURO);
-    addCabGrupo(t, "MARCACOES REGISTRADAS NO PONTO",   4, AZUL_MEDIO);
-    addCabGrupo(t, "JORNADA REALIZADA",                4, AZUL_ESCURO);
-    addCabGrupo(t, "TOTAL",                            1, AZUL_MEDIO);
+        // Grupos
+        addCabGrupo(t, "DIA",                            1, AZUL_ESCURO);
+        addCabGrupo(t, "MARCACOES REGISTRADAS NO PONTO", 4, AZUL_MEDIO);
+        addCabGrupo(t, "JORNADA REALIZADA",              4, AZUL_ESCURO);
+        addCabGrupo(t, "TOTAL",                          1, AZUL_MEDIO);
 
-    // Sub-cabeçalhos
-    addSubCab(t, "dd/MM");
-    addSubCab(t, "H1"); addSubCab(t, "H2");
-    addSubCab(t, "H3"); addSubCab(t, "H4");
-    addSubCab(t, "Ent.1"); addSubCab(t, "Sai.1");
-    addSubCab(t, "Ent.2"); addSubCab(t, "Sai.2");
-    addSubCab(t, "HH:mm");
+        // Sub-cabeçalhos
+        addSubCab(t, "dd/MM");
+        addSubCab(t, "H1"); addSubCab(t, "H2");
+        addSubCab(t, "H3"); addSubCab(t, "H4");
+        addSubCab(t, "Ent.1"); addSubCab(t, "Sai.1");
+        addSubCab(t, "Ent.2"); addSubCab(t, "Sai.2");
+        addSubCab(t, "HH:mm");
 
-    // Linhas de dados
-    boolean alt = false;
-    for (EspelhoDiaDTO dia : espelho.getDias()) {
-        Color bg = alt ? CINZA_CLARO : BRANCO;
-        List<EspelhoMarcacaoDTO> ms = dia.getMarcacoes();
+        // Linhas de dados
+        boolean alt = false;
+        for (EspelhoDiaDTO dia : espelho.getDias()) {
+            Color bg = alt ? CINZA_CLARO : BRANCO;
+            List<EspelhoMarcacaoDTO> ms = dia.getMarcacoes();
 
-        // Dia
-        Font fDia = dia.isTemInconsistencia() ? F_INCOMPLETO : F_CELULA_BOLD;
-        addCelulaLinha(t, formatDia(dia.getData()),
-                fDia, Element.ALIGN_CENTER, bg);
+            // Dia — vermelho se incompleto
+            Font fDia = dia.isTemInconsistencia() ? F_INCOMPLETO : F_CELULA_BOLD;
+            addCelulaLinha(t, formatDia(dia.getData()),
+                    fDia, Element.ALIGN_CENTER, bg);
 
-        // Marcacoes brutas H1-H4
-        for (int i = 0; i < 4; i++) {
-            if (i < ms.size()) {
-                Font f = ms.get(i).getTipo().startsWith("Entrada")
-                        ? F_ENTRADA : F_SAIDA;
-                addCelulaLinha(t, ms.get(i).getHorario(), f,
-                        Element.ALIGN_CENTER, bg);
-            } else {
-                addCelulaLinha(t, "", F_CELULA, Element.ALIGN_CENTER, bg);
+            // Marcações brutas H1-H4
+            for (int i = 0; i < 4; i++) {
+                if (i < ms.size()) {
+                    Font f = ms.get(i).getTipo().startsWith("Entrada")
+                            ? F_ENTRADA : F_SAIDA;
+                    addCelulaLinha(t, ms.get(i).getHorario(), f,
+                            Element.ALIGN_CENTER, bg);
+                } else {
+                    addCelulaLinha(t, "", F_CELULA, Element.ALIGN_CENTER, bg);
+                }
             }
-        }
 
-        // Jornada realizada — pares E/S
-        String[] jornada = new String[8];
-        int ej = 0, sj = 0;
-        for (EspelhoMarcacaoDTO m : ms) {
-            if (m.getTipo().startsWith("Entrada") && ej < 4) {
-                jornada[ej * 2] = m.getHorario();
-                ej++;
-            } else if (m.getTipo().startsWith("Sa") && sj < 4) {
-                jornada[sj * 2 + 1] = m.getHorario();
-                sj++;
+            // Jornada realizada — pares E/S
+            String[] jornada = new String[8];
+            int ej = 0, sj = 0;
+            for (EspelhoMarcacaoDTO m : ms) {
+                if (m.getTipo().startsWith("Entrada") && ej < 4) {
+                    jornada[ej * 2] = m.getHorario();
+                    ej++;
+                } else if (m.getTipo().startsWith("Sa") && sj < 4) {
+                    jornada[sj * 2 + 1] = m.getHorario();
+                    sj++;
+                }
             }
-        }
-        // Só exibe E1/S1/E2/S2 (4 slots) para caber em A4
-        for (int i = 0; i < 4; i++) {
-            String val = jornada[i] != null ? jornada[i] : "";
-            Font f = (i % 2 == 0) ? F_ENTRADA : F_SAIDA;
-            addCelulaLinha(t, val, f, Element.ALIGN_CENTER, bg);
+            // Exibe E1/S1/E2/S2 (4 slots)
+            for (int i = 0; i < 4; i++) {
+                String val = jornada[i] != null ? jornada[i] : "";
+                Font f = (i % 2 == 0) ? F_ENTRADA : F_SAIDA;
+                addCelulaLinha(t, val, f, Element.ALIGN_CENTER, bg);
+            }
+
+            // Total trabalhado
+            Font fTot = dia.isTemInconsistencia() ? F_INCOMPLETO : F_OK;
+            String totalStr = dia.getTotalTrabalhado()
+                    + (dia.isTemInconsistencia() ? " !" : "");
+            addCelulaLinha(t, totalStr, fTot, Element.ALIGN_CENTER, bg);
+
+            alt = !alt;
         }
 
-        // Total trabalhado
-        Font fTot = dia.isTemInconsistencia() ? F_INCOMPLETO : F_OK;
-        String totalStr = dia.getTotalTrabalhado()
-                + (dia.isTemInconsistencia() ? " !" : "");
-        addCelulaLinha(t, totalStr, fTot, Element.ALIGN_CENTER, bg);
-
-        alt = !alt;
+        return t;
     }
 
-    return t;
-}
     // ── 5. Totalizadores ─────────────────────────────────────────────────
 
     private PdfPTable gerarTotalizadores(EspelhoResponseDTO espelho)
@@ -323,6 +351,58 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
                 inc > 0 ? VERMELHO : new Color(80, 80, 80));
         addTotalBox(t, "MEDIA DIARIA",
                 calcularMedia(espelho), AZUL_MEDIO);
+
+        return t;
+    }
+
+    // ── 6. Resumo semanal ─────────────────────────────────────────────────
+
+    /**
+     * Tabela de resumo semanal.
+     * Colunas: Semana | Dias Trabalhados | Total Horas | Média Diária
+     */
+    private PdfPTable gerarResumoSemanal(EspelhoResponseDTO espelho)
+            throws DocumentException {
+
+        PdfPTable t = new PdfPTable(4);
+        t.setWidthPercentage(100);
+        t.setWidths(new float[]{3.5f, 1.5f, 1.5f, 1.5f});
+
+        // Título da seção
+        PdfPCell titulo = new PdfPCell(
+                new Phrase("RESUMO SEMANAL", F_SEC_TITULO));
+        titulo.setColspan(4);
+        titulo.setBackgroundColor(AZUL_ESCURO);
+        titulo.setPadding(5);
+        titulo.setBorderColor(BRANCO);
+        t.addCell(titulo);
+
+        // Cabeçalhos
+        for (String cab : new String[]{
+                "SEMANA", "DIAS TRABALHADOS", "TOTAL HORAS", "MEDIA DIARIA"}) {
+            PdfPCell c = celula(cab, F_CAB_TAB_DARK, Element.ALIGN_CENTER);
+            c.setBackgroundColor(AZUL_CLARO);
+            c.setPadding(4);
+            c.setBorderColor(CINZA_MEDIO);
+            t.addCell(c);
+        }
+
+        // Linhas de dados
+        boolean alt = false;
+        for (EspelhoSemanaDTO semana : espelho.getSemanas()) {
+            Color bg = alt ? CINZA_CLARO : BRANCO;
+
+            addCelulaLinha(t, semana.getSemana(),
+                    F_CELULA_BOLD, Element.ALIGN_LEFT, bg);
+            addCelulaLinha(t, String.valueOf(semana.getDiasTrabalhados()),
+                    F_CELULA, Element.ALIGN_CENTER, bg);
+            addCelulaLinha(t, semana.getTotalHoras(),
+                    F_CELULA_BOLD, Element.ALIGN_CENTER, bg);
+            addCelulaLinha(t, semana.getMediaDiaria(),
+                    F_CELULA, Element.ALIGN_CENTER, bg);
+
+            alt = !alt;
+        }
 
         return t;
     }
@@ -400,6 +480,8 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         t.addCell(c);
     }
 
+    // ── Formatadores ──────────────────────────────────────────────────────
+
     private String formatData(String iso) {
         if (iso == null || iso.length() < 10) return iso;
         return iso.substring(8, 10) + "/" + iso.substring(5, 7)
@@ -428,7 +510,7 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         return String.format("%02d:%02d", media / 60, media % 60);
     }
 
-    // ── Rodapé ────────────────────────────────────────────────────────────
+    // ── Rodapé com número de página ───────────────────────────────────────
 
     private static class RodapePagina extends PdfPageEventHelper {
         private final EspelhoResponseDTO espelho;
@@ -439,7 +521,7 @@ Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
         public void onEndPage(PdfWriter writer, Document doc) {
             try {
                 PdfContentByte cb = writer.getDirectContent();
-                String txt = "Chronus — " + espelho.getNome()
+                String txt = "Chronus  |  " + espelho.getNome()
                         + "  |  Emitido em: "
                         + LocalDateTime.now().format(
                             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
