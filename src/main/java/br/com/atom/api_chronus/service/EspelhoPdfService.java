@@ -1,6 +1,7 @@
 package br.com.atom.api_chronus.service;
 
 import br.com.atom.api_chronus.config.AfdtEmpresaConfig;
+import br.com.atom.api_chronus.config.LogoConfig;
 import br.com.atom.api_chronus.dto.EspelhoDiaDTO;
 import br.com.atom.api_chronus.dto.EspelhoMarcacaoDTO;
 import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
@@ -10,6 +11,7 @@ import com.lowagie.text.DocumentException;
 import com.lowagie.text.Element;
 import com.lowagie.text.Font;
 import com.lowagie.text.FontFactory;
+import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
@@ -22,11 +24,14 @@ import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
-import java.time.LocalDateTime;
+import java.io.File;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -34,14 +39,14 @@ import java.util.List;
  * Gera o PDF do Espelho de Ponto conforme Anexo II da Portaria 1510/MTE.
  *
  * Seções:
- *   1. Cabeçalho: empregador, endereço, empregado, PIS, emissão
- *   2. Horários contratuais (tabela vazia — não gerenciado pelo REP)
+ *   1. Cabeçalho: logo empresa + dados empregador/empregado
+ *   2. Horários contratuais (vazia — não gerenciado pelo REP)
  *   3. Período de apuração
- *   4. Tabela principal:
- *      Dia | Marcações (hh:mm hh:mm...) | Jornada E/S | Total
+ *   4. Tabela principal: Dia | Marcações | Jornada | Total
  *   5. Totalizadores do período
  *   6. Resumo semanal
- *   7. Assinaturas: funcionário e responsável pelo setor
+ *   7. Assinaturas
+ *   Rodapé: logo Chronus + número de página + data/hora (timezone correto)
  */
 @Slf4j
 @Service
@@ -49,6 +54,10 @@ import java.util.List;
 public class EspelhoPdfService {
 
     private final AfdtEmpresaConfig empresaConfig;
+    private final LogoConfig        logoConfig;
+
+    @Value("${app.timezone:America/Sao_Paulo}")
+    private String timezone;
 
     // ── Cores ──────────────────────────────────────────────────────────────
     private static final Color AZUL_ESCURO = new Color(28,  57,  108);
@@ -99,20 +108,22 @@ public class EspelhoPdfService {
 
     /**
      * Gera o PDF do espelho conforme Portaria 1510/MTE Anexo II.
-     *
-     * @param espelho dados gerados pelo EspelhoService
-     * @return bytes do PDF pronto para download, ou null se houver erro
      */
     public byte[] gerar(EspelhoResponseDTO espelho) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             Document doc = new Document(PageSize.A4, 28, 28, 40, 40);
             PdfWriter writer = PdfWriter.getInstance(doc, out);
-            writer.setPageEvent(new RodapePagina(espelho));
+
+            // Carrega logos — null se arquivo não existir (degrada graciosamente)
+            Image logoEmpresa = carregarImagem(logoConfig.getEmpresaPath(), 80, 40);
+            Image logoChronus = carregarImagem(logoConfig.getChronusPath(), 60, 25);
+
+            writer.setPageEvent(new RodapePagina(espelho, logoChronus, timezone));
             doc.open();
 
             // 1. Cabeçalho
-            doc.add(gerarCabecalho(espelho));
+            doc.add(gerarCabecalho(espelho, logoEmpresa));
             doc.add(new Paragraph(" "));
 
             // 2. Horários contratuais
@@ -158,15 +169,38 @@ public class EspelhoPdfService {
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * 1. Cabeçalho com dados da empresa e do funcionário.
+     * 1. Cabeçalho com logo da empresa à esquerda e dados à direita.
+     *
+     * Layout:
+     *   ┌──────────┬────────────────────────────────┐
+     *   │   LOGO   │  RELATORIO ESPELHO DE PONTO    │
+     *   │ EMPRESA  ├────────────────────────────────┤
+     *   │          │  dados empregador | empregado  │
+     *   └──────────┴────────────────────────────────┘
      */
-    private PdfPTable gerarCabecalho(EspelhoResponseDTO espelho)
+    private PdfPTable gerarCabecalho(EspelhoResponseDTO espelho, Image logoEmpresa)
             throws DocumentException {
 
-        PdfPTable t = new PdfPTable(1);
+        PdfPTable t = new PdfPTable(2);
         t.setWidthPercentage(100);
+        t.setWidths(new float[]{1.5f, 6.5f});
 
-        // Barra de título azul escuro
+        // ── Célula do logo da empresa ─────────────────────────────────────
+        PdfPCell cLogo;
+        if (logoEmpresa != null) {
+            cLogo = new PdfPCell(logoEmpresa, true);
+        } else {
+            // Placeholder se o logo não existir
+            cLogo = celula("LOGO", F_LABEL, Element.ALIGN_CENTER);
+        }
+        cLogo.setBackgroundColor(AZUL_CLARO);
+        cLogo.setHorizontalAlignment(Element.ALIGN_CENTER);
+        cLogo.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        cLogo.setPadding(8);
+        cLogo.setRowspan(2); // Ocupa título + dados
+        t.addCell(cLogo);
+
+        // ── Barra de título ───────────────────────────────────────────────
         PdfPCell titulo = celula(
                 "RELATORIO ESPELHO DE PONTO ELETRONICO",
                 F_TITULO, Element.ALIGN_CENTER);
@@ -175,7 +209,7 @@ public class EspelhoPdfService {
         titulo.setBorder(0);
         t.addCell(titulo);
 
-        // Dados em 4 colunas: label | valor | label | valor
+        // ── Dados da empresa e funcionário ────────────────────────────────
         PdfPTable dados = new PdfPTable(4);
         dados.setWidthPercentage(100);
         dados.setWidths(new float[]{1.2f, 3f, 1.2f, 3f});
@@ -183,8 +217,7 @@ public class EspelhoPdfService {
         addDado(dados, "Empregador:", empresaConfig.getRazaoSocial());
         addDado(dados, "CNPJ:",       formatCnpj(empresaConfig.getCnpj()));
         addDado(dados, "Endereco:",   nvl(empresaConfig.getLocal()));
-        addDado(dados, "Emitido em:", LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
+        addDado(dados, "Emitido em:", agora(timezone));
         addDado(dados, "Empregado:",  espelho.getNome());
         addDado(dados, "PIS:",        espelho.getPis());
         addDado(dados, "Admissao:",   "-");
@@ -208,7 +241,6 @@ public class EspelhoPdfService {
         t.setWidthPercentage(100);
         t.setWidths(new float[]{2f, 1.5f, 1.5f, 1.5f, 1.5f});
 
-        // Título da seção
         PdfPCell titulo = new PdfPCell(
                 new Phrase("HORARIOS CONTRATUAIS DO EMPREGADO", F_SEC_TITULO));
         titulo.setColspan(5);
@@ -217,7 +249,6 @@ public class EspelhoPdfService {
         titulo.setBorderColor(BRANCO);
         t.addCell(titulo);
 
-        // Cabeçalho
         for (String cab : new String[]{
                 "Cod. Horario (CH)", "Entrada", "Saida", "Entrada", "Saida"}) {
             PdfPCell c = celula(cab, F_CAB_TAB, Element.ALIGN_CENTER);
@@ -226,7 +257,6 @@ public class EspelhoPdfService {
             t.addCell(c);
         }
 
-        // 2 linhas vazias — CH não gerenciado pelo REP
         for (int i = 0; i < 2; i++) {
             for (int j = 0; j < 5; j++) {
                 PdfPCell c = celula("-", F_CELULA, Element.ALIGN_CENTER);
@@ -268,11 +298,8 @@ public class EspelhoPdfService {
     /**
      * 4. Tabela principal de marcações e jornada realizada.
      *
-     * Colunas:
-     *   Dia | Marcações (hh:mm hh:mm hh:mm) | Ent.1 Sai.1 Ent.2 Sai.2 | Total
-     *
-     * A coluna de marcações exibe todas as batidas do dia em uma célula
-     * no formato "hh:mm  hh:mm  hh:mm  hh:mm", conforme Portaria 1510.
+     * Coluna de marcações exibe todas as batidas do dia em uma célula:
+     * "08:27  12:01  13:00  17:29"
      */
     private PdfPTable gerarTabelaPrincipal(EspelhoResponseDTO espelho)
             throws DocumentException {
@@ -281,7 +308,7 @@ public class EspelhoPdfService {
         t.setWidthPercentage(100);
         t.setWidths(new float[]{
                 1.0f,   // Dia
-                3.0f,   // Marcações brutas (todas na mesma célula)
+                3.0f,   // Marcações (todas na mesma célula)
                 1.0f,   // Jornada Ent.1
                 1.0f,   // Jornada Sai.1
                 1.0f,   // Jornada Ent.2
@@ -289,13 +316,11 @@ public class EspelhoPdfService {
                 1.2f    // Total trabalhado
         });
 
-        // ── Grupos ────────────────────────────────────────────────────────
         addCabGrupo(t, "DIA",                            1, AZUL_ESCURO);
         addCabGrupo(t, "MARCACOES REGISTRADAS NO PONTO", 1, AZUL_MEDIO);
         addCabGrupo(t, "JORNADA REALIZADA",              4, AZUL_ESCURO);
         addCabGrupo(t, "TOTAL",                          1, AZUL_MEDIO);
 
-        // ── Sub-cabeçalhos ────────────────────────────────────────────────
         addSubCab(t, "dd/MM");
         addSubCab(t, "hh:mm  hh:mm  hh:mm  hh:mm");
         addSubCab(t, "Ent.1");
@@ -304,18 +329,16 @@ public class EspelhoPdfService {
         addSubCab(t, "Sai.2");
         addSubCab(t, "HH:mm");
 
-        // ── Linhas de dados ───────────────────────────────────────────────
         boolean alt = false;
         for (EspelhoDiaDTO dia : espelho.getDias()) {
             Color bg = alt ? CINZA_CLARO : BRANCO;
             List<EspelhoMarcacaoDTO> ms = dia.getMarcacoes();
 
-            // Coluna: Dia (vermelho se incompleto)
             Font fDia = dia.isTemInconsistencia() ? F_INCOMPLETO : F_CELULA_BOLD;
             addCelulaLinha(t, formatDia(dia.getData()),
                     fDia, Element.ALIGN_CENTER, bg);
 
-            // Coluna: Marcações — todas na mesma célula "08:27  12:01  13:00  17:29"
+            // Todas as marcações na mesma célula
             StringBuilder marcStr = new StringBuilder();
             for (int i = 0; i < ms.size(); i++) {
                 if (i > 0) marcStr.append("  ");
@@ -324,26 +347,22 @@ public class EspelhoPdfService {
             addCelulaLinha(t, marcStr.toString(),
                     F_CELULA, Element.ALIGN_CENTER, bg);
 
-            // Coluna: Jornada realizada — pares E/S separados
+            // Jornada E/S
             String[] jornada = new String[8];
             int ej = 0, sj = 0;
             for (EspelhoMarcacaoDTO m : ms) {
                 if (m.getTipo().startsWith("Entrada") && ej < 4) {
-                    jornada[ej * 2] = m.getHorario();
-                    ej++;
+                    jornada[ej * 2] = m.getHorario(); ej++;
                 } else if (m.getTipo().startsWith("Sa") && sj < 4) {
-                    jornada[sj * 2 + 1] = m.getHorario();
-                    sj++;
+                    jornada[sj * 2 + 1] = m.getHorario(); sj++;
                 }
             }
-            // Exibe E1/S1/E2/S2 (4 slots)
             for (int i = 0; i < 4; i++) {
                 String val = jornada[i] != null ? jornada[i] : "";
                 Font f = (i % 2 == 0) ? F_ENTRADA : F_SAIDA;
                 addCelulaLinha(t, val, f, Element.ALIGN_CENTER, bg);
             }
 
-            // Coluna: Total trabalhado (! se incompleto)
             Font fTot = dia.isTemInconsistencia() ? F_INCOMPLETO : F_OK;
             String totalStr = dia.getTotalTrabalhado()
                     + (dia.isTemInconsistencia() ? " !" : "");
@@ -381,9 +400,7 @@ public class EspelhoPdfService {
     }
 
     /**
-     * 6. Resumo semanal.
-     *
-     * Colunas: Semana | Dias Trabalhados | Total Horas | Média Diária
+     * 6. Resumo semanal: Semana | Dias | Total Horas | Média Diária
      */
     private PdfPTable gerarResumoSemanal(EspelhoResponseDTO espelho)
             throws DocumentException {
@@ -392,7 +409,6 @@ public class EspelhoPdfService {
         t.setWidthPercentage(100);
         t.setWidths(new float[]{3.5f, 1.5f, 1.5f, 1.5f});
 
-        // Título da seção
         PdfPCell titulo = new PdfPCell(
                 new Phrase("RESUMO SEMANAL", F_SEC_TITULO));
         titulo.setColspan(4);
@@ -401,7 +417,6 @@ public class EspelhoPdfService {
         titulo.setBorderColor(BRANCO);
         t.addCell(titulo);
 
-        // Cabeçalhos
         for (String cab : new String[]{
                 "SEMANA", "DIAS TRABALHADOS", "TOTAL HORAS", "MEDIA DIARIA"}) {
             PdfPCell c = celula(cab, F_CAB_TAB_DARK, Element.ALIGN_CENTER);
@@ -411,11 +426,9 @@ public class EspelhoPdfService {
             t.addCell(c);
         }
 
-        // Linhas de dados
         boolean alt = false;
         for (EspelhoSemanaDTO semana : espelho.getSemanas()) {
             Color bg = alt ? CINZA_CLARO : BRANCO;
-
             addCelulaLinha(t, semana.getSemana(),
                     F_CELULA_BOLD, Element.ALIGN_LEFT, bg);
             addCelulaLinha(t, String.valueOf(semana.getDiasTrabalhados()),
@@ -424,7 +437,6 @@ public class EspelhoPdfService {
                     F_CELULA_BOLD, Element.ALIGN_CENTER, bg);
             addCelulaLinha(t, semana.getMediaDiaria(),
                     F_CELULA, Element.ALIGN_CENTER, bg);
-
             alt = !alt;
         }
 
@@ -432,11 +444,7 @@ public class EspelhoPdfService {
     }
 
     /**
-     * 7. Bloco de assinaturas.
-     *
-     * Dois campos lado a lado:
-     *   - Assinatura do Funcionário
-     *   - Assinatura do Responsável pelo Setor
+     * 7. Bloco de assinaturas: funcionário e responsável pelo setor.
      */
     private PdfPTable gerarAssinaturas() throws DocumentException {
 
@@ -444,7 +452,6 @@ public class EspelhoPdfService {
         t.setWidthPercentage(100);
         t.setWidths(new float[]{1f, 1f});
 
-        // Título da seção
         PdfPCell titulo = new PdfPCell(
                 new Phrase("ASSINATURAS", F_SEC_TITULO));
         titulo.setColspan(2);
@@ -453,25 +460,19 @@ public class EspelhoPdfService {
         titulo.setBorderColor(BRANCO);
         t.addCell(titulo);
 
-        // Assinatura do funcionário
         t.addCell(celulaAssinatura("Assinatura do Funcionario:"));
-
-        // Assinatura do responsável pelo setor
         t.addCell(celulaAssinatura("Assinatura do Responsavel pelo Setor:"));
 
         return t;
     }
 
     /**
-     * Cria uma célula de assinatura com label, linha para assinar e espaço.
-     *
-     * @param label texto descritivo acima da linha
+     * Célula de assinatura com linha para assinar.
      */
     private PdfPCell celulaAssinatura(String label) {
         PdfPTable inner = new PdfPTable(1);
         inner.setWidthPercentage(100);
 
-        // Label descritivo
         PdfPCell cLabel = celula(label, F_LABEL, Element.ALIGN_LEFT);
         cLabel.setBorder(Rectangle.NO_BORDER);
         cLabel.setPaddingTop(10);
@@ -479,7 +480,6 @@ public class EspelhoPdfService {
         cLabel.setPaddingBottom(4);
         inner.addCell(cLabel);
 
-        // Linha de assinatura com borda inferior
         PdfPCell cLinha = celula("", F_CELULA, Element.ALIGN_LEFT);
         cLinha.setBorder(Rectangle.BOTTOM);
         cLinha.setBorderColor(PRETO);
@@ -489,7 +489,6 @@ public class EspelhoPdfService {
         cLinha.setPaddingRight(15f);
         inner.addCell(cLinha);
 
-        // Espaço inferior
         PdfPCell cEspaco = celula("", F_CELULA, Element.ALIGN_LEFT);
         cEspaco.setBorder(Rectangle.NO_BORDER);
         cEspaco.setMinimumHeight(10f);
@@ -576,24 +575,45 @@ public class EspelhoPdfService {
         t.addCell(c);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // FORMATADORES
-    // ─────────────────────────────────────────────────────────────────────
+    /**
+     * Carrega uma imagem PNG do disco e redimensiona.
+     * Retorna null se o arquivo não existir (PDF gerado sem o logo).
+     */
+    private Image carregarImagem(String caminho, float largura, float altura) {
+        try {
+            File f = new File(caminho);
+            if (!f.exists()) {
+                log.warn("Logo não encontrado: {} — PDF gerado sem o logo.", caminho);
+                return null;
+            }
+            Image img = Image.getInstance(caminho);
+            img.scaleToFit(largura, altura);
+            return img;
+        } catch (Exception e) {
+            log.warn("Erro ao carregar logo {}: {}", caminho, e.getMessage());
+            return null;
+        }
+    }
 
-    /** Formata data ISO para dd/MM/yyyy */
+    // ── Formatadores ──────────────────────────────────────────────────────
+
+    /** Data/hora atual no timezone configurado */
+    private String agora(String tz) {
+        return ZonedDateTime.now(ZoneId.of(tz))
+                .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
+    }
+
     private String formatData(String iso) {
         if (iso == null || iso.length() < 10) return iso;
         return iso.substring(8, 10) + "/" + iso.substring(5, 7)
                 + "/" + iso.substring(0, 4);
     }
 
-    /** Formata data ISO para dd/MM */
     private String formatDia(String iso) {
         if (iso == null || iso.length() < 10) return iso;
         return iso.substring(8, 10) + "/" + iso.substring(5, 7);
     }
 
-    /** Formata CNPJ numérico para XX.XXX.XXX/XXXX-XX */
     private String formatCnpj(String c) {
         if (c == null || c.length() != 14) return c;
         return c.substring(0, 2) + "." + c.substring(2, 5) + "."
@@ -601,10 +621,8 @@ public class EspelhoPdfService {
                 + "-" + c.substring(12);
     }
 
-    /** Retorna o valor ou "-" se nulo */
     private String nvl(String s) { return s != null ? s : "-"; }
 
-    /** Calcula a média diária de horas a partir do total do período */
     private String calcularMedia(EspelhoResponseDTO e) {
         if (e.getTotalDiasComPonto() == 0) return "00:00";
         String[] p = e.getTotalHorasTrabalhadas().split(":");
@@ -614,28 +632,55 @@ public class EspelhoPdfService {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // RODAPÉ COM NÚMERO DE PÁGINA
+    // RODAPÉ COM LOGO CHRONUS + NÚMERO DE PÁGINA
     // ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * Rodapé de cada página com:
+     *   - Logo do Chronus à esquerda
+     *   - Texto central: nome, data/hora (timezone correto) e página
+     */
     private static class RodapePagina extends PdfPageEventHelper {
 
         private final EspelhoResponseDTO espelho;
+        private final Image              logoChronus;
+        private final String             timezone;
 
-        RodapePagina(EspelhoResponseDTO e) { this.espelho = e; }
+        RodapePagina(EspelhoResponseDTO e, Image logo, String tz) {
+            this.espelho     = e;
+            this.logoChronus = logo;
+            this.timezone    = tz;
+        }
 
         @Override
         public void onEndPage(PdfWriter writer, Document doc) {
             try {
                 PdfContentByte cb = writer.getDirectContent();
+
+                // Logo Chronus no rodapé à esquerda
+                if (logoChronus != null) {
+                    float x = doc.left();
+                    float y = doc.bottom() - 20;
+                    logoChronus.setAbsolutePosition(x, y);
+                    cb.addImage(logoChronus);
+                }
+
+                // Texto central do rodapé com timezone correto
+                String agora = ZonedDateTime.now(ZoneId.of(timezone))
+                        .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
+
+                Font fRodape = FontFactory.getFont(
+                        FontFactory.HELVETICA, 6, Color.GRAY);
+
                 String txt = "Chronus  |  " + espelho.getNome()
-                        + "  |  Emitido em: "
-                        + LocalDateTime.now().format(
-                            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+                        + "  |  Emitido em: " + agora
                         + "  |  Pag. " + writer.getPageNumber();
-                Phrase p = new Phrase(txt, F_RODAPE);
+
+                Phrase p = new Phrase(txt, fRodape);
                 ColumnText.showTextAligned(cb, Element.ALIGN_CENTER, p,
                         (doc.left() + doc.right()) / 2,
                         doc.bottom() - 15, 0);
+
             } catch (Exception ignored) {}
         }
     }

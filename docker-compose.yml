@@ -24,18 +24,18 @@ services:
   chronus:
     build: .
     container_name: chronus-api
-    
     ports:
       - "8081:8081"
-
     env_file:
       - .env
-
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-dev}
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      # Pasta local com os logos mapeada para dentro do container
+      - ./logos:/app/logos
     restart: unless-stopped
 
 volumes:

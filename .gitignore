@@ -43,3 +43,7 @@ target/
 # Docker: volumes locais gerados em runtime 
 data/
 logs/
+
+*.pdf
+AF*.txt
+*.json
