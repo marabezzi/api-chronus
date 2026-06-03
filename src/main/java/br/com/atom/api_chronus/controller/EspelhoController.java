@@ -2,6 +2,8 @@ package br.com.atom.api_chronus.controller;
 
 import java.util.Map;
 
+
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -11,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import br.com.atom.api_chronus.dto.EspelhoRequestDTO;
 import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
 import br.com.atom.api_chronus.dto.UsuarioDTO;
+import br.com.atom.api_chronus.service.EspelhoPdfService;
 import br.com.atom.api_chronus.service.EspelhoService;
 import br.com.atom.api_chronus.service.UsuarioService;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +33,8 @@ public class EspelhoController {
 
     private final EspelhoService espelhoService;
     private final UsuarioService usuarioService;
+    // Adicione no topo da classe junto com espelhoService e usuarioService
+    private final EspelhoPdfService pdfService;
 
 
     /**
@@ -200,4 +205,99 @@ public ResponseEntity<?> espelhoPorCodigo(
             .status(503)
             .body(Map.of("erro", "Não foi possível gerar o espelho de ponto"));
 }
+
+
+
+/**
+ * POST /api/espelho/pis/pdf
+ *
+ * Gera o PDF do espelho de ponto por PIS para download.
+ */
+@PostMapping(value = "/pis/pdf", produces = "application/pdf")
+public ResponseEntity<?> espelhoPdfPorPis(
+        @RequestBody EspelhoRequestDTO request) {
+
+    if (request.getPis() == null || request.getPis().isBlank()
+            || request.getDataInicial() == null
+            || request.getDataFinal() == null) {
+        return ResponseEntity.badRequest()
+                .body("Campos obrigatórios: pis, dataInicial, dataFinal");
+    }
+
+    EspelhoResponseDTO espelho = espelhoService.gerar(request);
+    if (espelho == null) {
+        return ResponseEntity.status(503)
+                .body("Não foi possível gerar o espelho");
+    }
+
+    byte[] pdf = pdfService.gerar(espelho);
+    if (pdf == null) {
+        return ResponseEntity.status(503)
+                .body("Erro ao gerar o PDF");
+    }
+
+    String nomeArquivo = "Espelho_"
+            + espelho.getNome().replaceAll("\\s+", "_")
+            + "_" + request.getDataInicial()
+            + ".pdf";
+
+    return ResponseEntity.ok()
+            .header("Content-Disposition",
+                    "attachment; filename=\"" + nomeArquivo + "\"")
+            .header("Content-Type", "application/pdf")
+            .body(pdf);
+}
+
+        /**
+         * POST /api/espelho/nome/pdf
+         *
+         * Gera o PDF do espelho de ponto por nome para download.
+         */
+        @PostMapping(value = "/nome/pdf", produces = "application/pdf")
+        public ResponseEntity<?> espelhoPdfPorNome(
+                @RequestBody Map<String, String> body) {
+
+        String nome        = body.get("nome");
+        String dataInicial = body.get("dataInicial");
+        String dataFinal   = body.get("dataFinal");
+
+        if (nome == null || nome.isBlank()
+                || dataInicial == null || dataFinal == null) {
+                return ResponseEntity.badRequest()
+                        .body("Campos obrigatórios: nome, dataInicial, dataFinal");
+        }
+
+        UsuarioDTO usuario = usuarioService.buscarPorNome(nome);
+        if (usuario == null) {
+                return ResponseEntity.status(404)
+                        .body("Funcionário não encontrado: " + nome);
+        }
+
+        EspelhoRequestDTO request = new EspelhoRequestDTO();
+        request.setPis(usuario.getPisFormatado());
+        request.setDataInicial(dataInicial);
+        request.setDataFinal(dataFinal);
+
+        EspelhoResponseDTO espelho = espelhoService.gerar(request);
+        if (espelho == null) {
+                return ResponseEntity.status(503)
+                        .body("Não foi possível gerar o espelho");
+        }
+
+        byte[] pdf = pdfService.gerar(espelho);
+        if (pdf == null) {
+                return ResponseEntity.status(503)
+                        .body("Erro ao gerar o PDF");
+        }
+
+        String nomeArquivo = "Espelho_"
+                + espelho.getNome().replaceAll("\\s+", "_")
+                + "_" + dataInicial + ".pdf";
+
+        return ResponseEntity.ok()
+                .header("Content-Disposition",
+                        "attachment; filename=\"" + nomeArquivo + "\"")
+                .header("Content-Type", "application/pdf")
+                .body(pdf);
+        }
 }

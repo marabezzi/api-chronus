@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import br.com.atom.api_chronus.config.IdClassConfig;
+
 import br.com.atom.api_chronus.dto.UsuarioDTO;
 import br.com.atom.api_chronus.dto.UsuarioResponseDTO;
 import lombok.RequiredArgsConstructor;
@@ -37,7 +37,6 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class UsuarioService {
 
-    private final IdClassConfig config;
     private final HttpClient httpClient;
     private final SessionManager sessionManager;
     private final IdClassAuthService authService;
