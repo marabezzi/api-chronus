@@ -37,9 +37,11 @@ import java.util.List;
  *   1. Cabeçalho: empregador, endereço, empregado, PIS, emissão
  *   2. Horários contratuais (tabela vazia — não gerenciado pelo REP)
  *   3. Período de apuração
- *   4. Tabela principal: Dia | Marcações | Jornada | Total
+ *   4. Tabela principal:
+ *      Dia | Marcações (hh:mm hh:mm...) | Jornada E/S | Total
  *   5. Totalizadores do período
- *   6. Resumo semanal: semana | dias | total horas | média diária
+ *   6. Resumo semanal
+ *   7. Assinaturas: funcionário e responsável pelo setor
  */
 @Slf4j
 @Service
@@ -91,11 +93,15 @@ public class EspelhoPdfService {
     private static final Font F_SEC_TITULO =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, BRANCO);
 
+    // ─────────────────────────────────────────────────────────────────────
+    // MÉTODO PRINCIPAL
+    // ─────────────────────────────────────────────────────────────────────
+
     /**
      * Gera o PDF do espelho conforme Portaria 1510/MTE Anexo II.
      *
      * @param espelho dados gerados pelo EspelhoService
-     * @return bytes do PDF pronto para download
+     * @return bytes do PDF pronto para download, ou null se houver erro
      */
     public byte[] gerar(EspelhoResponseDTO espelho) {
         try {
@@ -105,30 +111,34 @@ public class EspelhoPdfService {
             writer.setPageEvent(new RodapePagina(espelho));
             doc.open();
 
-            // ── 1. Cabeçalho ──────────────────────────────────────────────
+            // 1. Cabeçalho
             doc.add(gerarCabecalho(espelho));
             doc.add(new Paragraph(" "));
 
-            // ── 2. Horários contratuais ───────────────────────────────────
+            // 2. Horários contratuais
             doc.add(gerarHorariosContratuais());
             doc.add(new Paragraph(" "));
 
-            // ── 3. Período ────────────────────────────────────────────────
+            // 3. Período
             doc.add(gerarPeriodo(espelho));
             doc.add(new Paragraph(" "));
 
-            // ── 4. Tabela principal ───────────────────────────────────────
+            // 4. Tabela principal
             doc.add(gerarTabelaPrincipal(espelho));
             doc.add(new Paragraph(" "));
 
-            // ── 5. Totalizadores ──────────────────────────────────────────
+            // 5. Totalizadores
             doc.add(gerarTotalizadores(espelho));
 
-            // ── 6. Resumo semanal ─────────────────────────────────────────
+            // 6. Resumo semanal
             if (espelho.getSemanas() != null && !espelho.getSemanas().isEmpty()) {
                 doc.add(new Paragraph(" "));
                 doc.add(gerarResumoSemanal(espelho));
             }
+
+            // 7. Assinaturas
+            doc.add(new Paragraph(" "));
+            doc.add(gerarAssinaturas());
 
             doc.close();
             log.info("PDF espelho gerado: {} | {} a {}",
@@ -143,15 +153,20 @@ public class EspelhoPdfService {
         }
     }
 
-    // ── 1. Cabeçalho ─────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // SEÇÕES DO PDF
+    // ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * 1. Cabeçalho com dados da empresa e do funcionário.
+     */
     private PdfPTable gerarCabecalho(EspelhoResponseDTO espelho)
             throws DocumentException {
 
         PdfPTable t = new PdfPTable(1);
         t.setWidthPercentage(100);
 
-        // Barra de título
+        // Barra de título azul escuro
         PdfPCell titulo = celula(
                 "RELATORIO ESPELHO DE PONTO ELETRONICO",
                 F_TITULO, Element.ALIGN_CENTER);
@@ -185,19 +200,20 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── 2. Horários contratuais ───────────────────────────────────────────
-
+    /**
+     * 2. Tabela de horários contratuais (vazia — não gerenciado pelo REP).
+     */
     private PdfPTable gerarHorariosContratuais() throws DocumentException {
         PdfPTable t = new PdfPTable(5);
         t.setWidthPercentage(100);
-        t.setWidths(new float[]{1.5f, 1.5f, 1.5f, 1.5f, 1.5f});
+        t.setWidths(new float[]{2f, 1.5f, 1.5f, 1.5f, 1.5f});
 
         // Título da seção
         PdfPCell titulo = new PdfPCell(
                 new Phrase("HORARIOS CONTRATUAIS DO EMPREGADO", F_SEC_TITULO));
         titulo.setColspan(5);
         titulo.setBackgroundColor(AZUL_ESCURO);
-        titulo.setPadding(4);
+        titulo.setPadding(5);
         titulo.setBorderColor(BRANCO);
         t.addCell(titulo);
 
@@ -210,12 +226,12 @@ public class EspelhoPdfService {
             t.addCell(c);
         }
 
-        // Linhas vazias — CH não gerenciado pelo REP
+        // 2 linhas vazias — CH não gerenciado pelo REP
         for (int i = 0; i < 2; i++) {
             for (int j = 0; j < 5; j++) {
                 PdfPCell c = celula("-", F_CELULA, Element.ALIGN_CENTER);
                 c.setBackgroundColor(i % 2 == 0 ? BRANCO : CINZA_CLARO);
-                c.setPadding(3);
+                c.setPadding(4);
                 t.addCell(c);
             }
         }
@@ -223,8 +239,9 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── 3. Período ────────────────────────────────────────────────────────
-
+    /**
+     * 3. Período de apuração.
+     */
     private PdfPTable gerarPeriodo(EspelhoResponseDTO espelho)
             throws DocumentException {
 
@@ -248,59 +265,66 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── 4. Tabela principal ───────────────────────────────────────────────
-
+    /**
+     * 4. Tabela principal de marcações e jornada realizada.
+     *
+     * Colunas:
+     *   Dia | Marcações (hh:mm hh:mm hh:mm) | Ent.1 Sai.1 Ent.2 Sai.2 | Total
+     *
+     * A coluna de marcações exibe todas as batidas do dia em uma célula
+     * no formato "hh:mm  hh:mm  hh:mm  hh:mm", conforme Portaria 1510.
+     */
     private PdfPTable gerarTabelaPrincipal(EspelhoResponseDTO espelho)
             throws DocumentException {
 
-        // 10 colunas — cabe em A4 portrait
-        PdfPTable t = new PdfPTable(10);
+        PdfPTable t = new PdfPTable(7);
         t.setWidthPercentage(100);
         t.setWidths(new float[]{
-                1.0f,                    // Dia
-                1.0f, 1.0f, 1.0f, 1.0f, // Marcacoes H1 H2 H3 H4
-                1.0f, 1.0f, 1.0f, 1.0f, // Jornada E1/S1/E2/S2
-                1.2f                     // Total trabalhado
+                1.0f,   // Dia
+                3.0f,   // Marcações brutas (todas na mesma célula)
+                1.0f,   // Jornada Ent.1
+                1.0f,   // Jornada Sai.1
+                1.0f,   // Jornada Ent.2
+                1.0f,   // Jornada Sai.2
+                1.2f    // Total trabalhado
         });
 
-        // Grupos
+        // ── Grupos ────────────────────────────────────────────────────────
         addCabGrupo(t, "DIA",                            1, AZUL_ESCURO);
-        addCabGrupo(t, "MARCACOES REGISTRADAS NO PONTO", 4, AZUL_MEDIO);
+        addCabGrupo(t, "MARCACOES REGISTRADAS NO PONTO", 1, AZUL_MEDIO);
         addCabGrupo(t, "JORNADA REALIZADA",              4, AZUL_ESCURO);
         addCabGrupo(t, "TOTAL",                          1, AZUL_MEDIO);
 
-        // Sub-cabeçalhos
+        // ── Sub-cabeçalhos ────────────────────────────────────────────────
         addSubCab(t, "dd/MM");
-        addSubCab(t, "H1"); addSubCab(t, "H2");
-        addSubCab(t, "H3"); addSubCab(t, "H4");
-        addSubCab(t, "Ent.1"); addSubCab(t, "Sai.1");
-        addSubCab(t, "Ent.2"); addSubCab(t, "Sai.2");
+        addSubCab(t, "hh:mm  hh:mm  hh:mm  hh:mm");
+        addSubCab(t, "Ent.1");
+        addSubCab(t, "Sai.1");
+        addSubCab(t, "Ent.2");
+        addSubCab(t, "Sai.2");
         addSubCab(t, "HH:mm");
 
-        // Linhas de dados
+        // ── Linhas de dados ───────────────────────────────────────────────
         boolean alt = false;
         for (EspelhoDiaDTO dia : espelho.getDias()) {
             Color bg = alt ? CINZA_CLARO : BRANCO;
             List<EspelhoMarcacaoDTO> ms = dia.getMarcacoes();
 
-            // Dia — vermelho se incompleto
+            // Coluna: Dia (vermelho se incompleto)
             Font fDia = dia.isTemInconsistencia() ? F_INCOMPLETO : F_CELULA_BOLD;
             addCelulaLinha(t, formatDia(dia.getData()),
                     fDia, Element.ALIGN_CENTER, bg);
 
-            // Marcações brutas H1-H4
-            for (int i = 0; i < 4; i++) {
-                if (i < ms.size()) {
-                    Font f = ms.get(i).getTipo().startsWith("Entrada")
-                            ? F_ENTRADA : F_SAIDA;
-                    addCelulaLinha(t, ms.get(i).getHorario(), f,
-                            Element.ALIGN_CENTER, bg);
-                } else {
-                    addCelulaLinha(t, "", F_CELULA, Element.ALIGN_CENTER, bg);
-                }
+            // Coluna: Marcações — todas na mesma célula "08:27  12:01  13:00  17:29"
+            StringBuilder marcStr = new StringBuilder();
+            for (int i = 0; i < ms.size(); i++) {
+                if (i > 0) marcStr.append("  ");
+                marcStr.append(ms.get(i).getHorario());
             }
+            addCelulaLinha(t, marcStr.toString(),
+                    F_CELULA, Element.ALIGN_CENTER, bg);
 
-            // Jornada realizada — pares E/S
+            // Coluna: Jornada realizada — pares E/S separados
             String[] jornada = new String[8];
             int ej = 0, sj = 0;
             for (EspelhoMarcacaoDTO m : ms) {
@@ -319,7 +343,7 @@ public class EspelhoPdfService {
                 addCelulaLinha(t, val, f, Element.ALIGN_CENTER, bg);
             }
 
-            // Total trabalhado
+            // Coluna: Total trabalhado (! se incompleto)
             Font fTot = dia.isTemInconsistencia() ? F_INCOMPLETO : F_OK;
             String totalStr = dia.getTotalTrabalhado()
                     + (dia.isTemInconsistencia() ? " !" : "");
@@ -331,8 +355,9 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── 5. Totalizadores ─────────────────────────────────────────────────
-
+    /**
+     * 5. Totalizadores do período.
+     */
     private PdfPTable gerarTotalizadores(EspelhoResponseDTO espelho)
             throws DocumentException {
 
@@ -355,10 +380,9 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── 6. Resumo semanal ─────────────────────────────────────────────────
-
     /**
-     * Tabela de resumo semanal.
+     * 6. Resumo semanal.
+     *
      * Colunas: Semana | Dias Trabalhados | Total Horas | Média Diária
      */
     private PdfPTable gerarResumoSemanal(EspelhoResponseDTO espelho)
@@ -407,7 +431,79 @@ public class EspelhoPdfService {
         return t;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────
+    /**
+     * 7. Bloco de assinaturas.
+     *
+     * Dois campos lado a lado:
+     *   - Assinatura do Funcionário
+     *   - Assinatura do Responsável pelo Setor
+     */
+    private PdfPTable gerarAssinaturas() throws DocumentException {
+
+        PdfPTable t = new PdfPTable(2);
+        t.setWidthPercentage(100);
+        t.setWidths(new float[]{1f, 1f});
+
+        // Título da seção
+        PdfPCell titulo = new PdfPCell(
+                new Phrase("ASSINATURAS", F_SEC_TITULO));
+        titulo.setColspan(2);
+        titulo.setBackgroundColor(AZUL_ESCURO);
+        titulo.setPadding(5);
+        titulo.setBorderColor(BRANCO);
+        t.addCell(titulo);
+
+        // Assinatura do funcionário
+        t.addCell(celulaAssinatura("Assinatura do Funcionario:"));
+
+        // Assinatura do responsável pelo setor
+        t.addCell(celulaAssinatura("Assinatura do Responsavel pelo Setor:"));
+
+        return t;
+    }
+
+    /**
+     * Cria uma célula de assinatura com label, linha para assinar e espaço.
+     *
+     * @param label texto descritivo acima da linha
+     */
+    private PdfPCell celulaAssinatura(String label) {
+        PdfPTable inner = new PdfPTable(1);
+        inner.setWidthPercentage(100);
+
+        // Label descritivo
+        PdfPCell cLabel = celula(label, F_LABEL, Element.ALIGN_LEFT);
+        cLabel.setBorder(Rectangle.NO_BORDER);
+        cLabel.setPaddingTop(10);
+        cLabel.setPaddingLeft(15);
+        cLabel.setPaddingBottom(4);
+        inner.addCell(cLabel);
+
+        // Linha de assinatura com borda inferior
+        PdfPCell cLinha = celula("", F_CELULA, Element.ALIGN_LEFT);
+        cLinha.setBorder(Rectangle.BOTTOM);
+        cLinha.setBorderColor(PRETO);
+        cLinha.setBorderWidth(0.5f);
+        cLinha.setMinimumHeight(35f);
+        cLinha.setPaddingLeft(15f);
+        cLinha.setPaddingRight(15f);
+        inner.addCell(cLinha);
+
+        // Espaço inferior
+        PdfPCell cEspaco = celula("", F_CELULA, Element.ALIGN_LEFT);
+        cEspaco.setBorder(Rectangle.NO_BORDER);
+        cEspaco.setMinimumHeight(10f);
+        inner.addCell(cEspaco);
+
+        PdfPCell cell = new PdfPCell(inner);
+        cell.setPadding(5);
+        cell.setBorderColor(CINZA_MEDIO);
+        return cell;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // HELPERS
+    // ─────────────────────────────────────────────────────────────────────
 
     private PdfPCell celula(String texto, Font font, int align) {
         PdfPCell c = new PdfPCell(
@@ -480,19 +576,24 @@ public class EspelhoPdfService {
         t.addCell(c);
     }
 
-    // ── Formatadores ──────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // FORMATADORES
+    // ─────────────────────────────────────────────────────────────────────
 
+    /** Formata data ISO para dd/MM/yyyy */
     private String formatData(String iso) {
         if (iso == null || iso.length() < 10) return iso;
         return iso.substring(8, 10) + "/" + iso.substring(5, 7)
                 + "/" + iso.substring(0, 4);
     }
 
+    /** Formata data ISO para dd/MM */
     private String formatDia(String iso) {
         if (iso == null || iso.length() < 10) return iso;
         return iso.substring(8, 10) + "/" + iso.substring(5, 7);
     }
 
+    /** Formata CNPJ numérico para XX.XXX.XXX/XXXX-XX */
     private String formatCnpj(String c) {
         if (c == null || c.length() != 14) return c;
         return c.substring(0, 2) + "." + c.substring(2, 5) + "."
@@ -500,8 +601,10 @@ public class EspelhoPdfService {
                 + "-" + c.substring(12);
     }
 
+    /** Retorna o valor ou "-" se nulo */
     private String nvl(String s) { return s != null ? s : "-"; }
 
+    /** Calcula a média diária de horas a partir do total do período */
     private String calcularMedia(EspelhoResponseDTO e) {
         if (e.getTotalDiasComPonto() == 0) return "00:00";
         String[] p = e.getTotalHorasTrabalhadas().split(":");
@@ -510,9 +613,12 @@ public class EspelhoPdfService {
         return String.format("%02d:%02d", media / 60, media % 60);
     }
 
-    // ── Rodapé com número de página ───────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // RODAPÉ COM NÚMERO DE PÁGINA
+    // ─────────────────────────────────────────────────────────────────────
 
     private static class RodapePagina extends PdfPageEventHelper {
+
         private final EspelhoResponseDTO espelho;
 
         RodapePagina(EspelhoResponseDTO e) { this.espelho = e; }
