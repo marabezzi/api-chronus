@@ -3,69 +3,71 @@ package br.com.atom.api_chronus.dto;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+
 /**
  * DTO para criação e atualização de funcionários.
  *
  * Campos obrigatórios: pis, nome
- * Campos opcionais:    matricula, cargo, setor, email,
- *                      celular, dataAdmissao, observacoes
  */
 @Data
 @NoArgsConstructor
 public class FuncionarioRequestDTO {
 
-    /**
-     * PIS do funcionário (obrigatório).
-     * Aceita com ou sem zeros à esquerda.
-     * Exemplo: "12952592162" ou "012952592162"
-     */
+    /** PIS (obrigatório). Aceita com ou sem zeros à esquerda. */
     private String pis;
 
-    /**
-     * Nome completo do funcionário (obrigatório).
-     * Convertido automaticamente para maiúsculas.
-     * Exemplo: "DONATA APARECIDA MARTINS GARCIA"
-     */
+    /** Nome completo (obrigatório). Convertido para maiúsculas. */
     private String nome;
 
-    /**
-     * Número de matrícula do funcionário (opcional).
-     * Deve ser único entre os funcionários ativos.
-     */
+    /** Número de matrícula */
     private Integer matricula;
 
     /**
-     * Cargo ou função do funcionário (opcional).
-     * Exemplo: "Auxiliar Administrativo"
+     * CPF — apenas dígitos ou formatado.
+     * Exemplos aceitos: "12345678901" ou "123.456.789-01"
+     * Armazenado sem formatação, exibido formatado.
      */
+    private String cpf;
+
+    /** RG */
+    private String rg;
+
+    /** Endereço completo */
+    private String endereco;
+
+    /** Cargo ou função */
     private String cargo;
 
-    /**
-     * Setor ou departamento (opcional).
-     * Exemplo: "Recursos Humanos"
-     */
+    /** Setor ou departamento */
     private String setor;
 
-    /**
-     * E-mail do funcionário (opcional).
-     * Exemplo: "joao.silva@empresa.com.br"
-     */
+    /** E-mail */
     private String email;
 
-    /**
-     * Celular do funcionário (opcional).
-     * Exemplo: "(14) 99999-9999"
-     */
+    /** Celular */
     private String celular;
 
-    /**
-     * Data de admissão no formato ddMMyyyy (opcional).
-     * Exemplo: "15032021" = 15/03/2021
-     */
-    private String dataAdmissao;
+    /** Salário */
+    private BigDecimal salario;
 
     /**
-     * Observações gerais sobre o funcionário (opcional).
+     * Indica se o funcionário é supervisor.
+     * Default: false.
+     * Se true, supervisorPis é ignorado.
      */
+    private Boolean supervisor = false;
+
+    /**
+     * PIS do supervisor deste funcionário.
+     * Usado apenas quando supervisor=false.
+     * O supervisor informado deve estar ativo e ter supervisor=true.
+     */
+    private String supervisorPis;
+
+    /** Data de admissão no formato ddMMyyyy. Ex: "15032021" */
+    private String dataAdmissao;
+
+    /** Observações gerais */
     private String observacoes;
 }

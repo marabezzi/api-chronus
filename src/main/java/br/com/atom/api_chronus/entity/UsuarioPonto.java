@@ -5,16 +5,21 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * Entidade que representa um usuário cadastrado no relógio iDClass.
+ * Entidade que representa um funcionário cadastrado no sistema.
  *
- * Mapeada para a tabela "usuarios_ponto".
- * Sincronizada via /api/sync/usuarios (load_users.fcgi).
- * Campos extras (cargo, setor, email, etc.) são gerenciados
- * localmente via CRUD — não existem no relógio.
+ * Sincronizada com o relógio iDClass via /api/sync/usuarios.
+ * Campos extras (cargo, setor, cpf, supervisor, etc.) são
+ * gerenciados localmente via CRUD — não existem no relógio.
+ *
+ * Regras de supervisor:
+ *   - supervisor=true  → pode ter subordinados via supervisorRef
+ *   - supervisor=false → pode ter um supervisorRef apontando para
+ *                        um supervisor ativo
  */
 @Data
 @NoArgsConstructor
@@ -29,6 +34,8 @@ public class UsuarioPonto {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    // ── Campos do relógio iDClass ─────────────────────────────────────────
 
     /** PIS numérico como retornado pelo relógio */
     @Column(nullable = false, unique = true)
@@ -64,21 +71,37 @@ public class UsuarioPonto {
 
     // ── Campos extras — gerenciados localmente ────────────────────────────
 
-    /** Cargo/função do funcionário */
+    /** CPF (11 dígitos, sem formatação) */
+    @Column(length = 11)
+    private String cpf;
+
+    /** RG */
+    @Column(length = 20)
+    private String rg;
+
+    /** Endereço completo */
+    @Column(length = 300)
+    private String endereco;
+
+    /** Cargo ou função */
     @Column(length = 100)
     private String cargo;
 
-    /** Setor/departamento do funcionário */
+    /** Setor ou departamento */
     @Column(length = 100)
     private String setor;
 
-    /** E-mail do funcionário */
+    /** E-mail */
     @Column(length = 150)
     private String email;
 
-    /** Celular do funcionário */
+    /** Celular */
     @Column(length = 20)
     private String celular;
+
+    /** Salário */
+    @Column(precision = 10, scale = 2)
+    private BigDecimal salario;
 
     /** Data de admissão */
     @Column(name = "data_admissao")
@@ -95,4 +118,23 @@ public class UsuarioPonto {
     /** Data de inativação (null se ativo) */
     @Column(name = "data_inativacao")
     private LocalDate dataInativacao;
+
+    // ── Supervisor ────────────────────────────────────────────────────────
+
+    /**
+     * Indica se este funcionário é supervisor.
+     * Supervisores podem ter múltiplos subordinados vinculados.
+     * Default: false.
+     */
+    @Column(nullable = false)
+    private Boolean supervisor = false;
+
+    /**
+     * Referência ao supervisor deste funcionário.
+     * Null se o funcionário for supervisor ou não tiver supervisor.
+     * Carregamento LAZY para não impactar performance nas listagens.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supervisor_id")
+    private UsuarioPonto supervisorRef;
 }

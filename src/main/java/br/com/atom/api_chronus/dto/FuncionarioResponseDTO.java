@@ -4,18 +4,17 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+
 /**
  * DTO de resposta para operações de CRUD de funcionários.
- *
- * Inclui aviso quando o relógio precisa ser atualizado manualmente,
- * pois o iDClass REP não possui API de escrita de usuários.
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class FuncionarioResponseDTO {
 
-    /** PIS com 12 dígitos e zeros à esquerda */
+    /** PIS com 12 dígitos */
     private String pis;
 
     /** Nome completo em maiúsculas */
@@ -24,10 +23,19 @@ public class FuncionarioResponseDTO {
     /** Número de matrícula */
     private Integer matricula;
 
-    /** Cargo ou função */
+    /** CPF formatado: 000.000.000-00 */
+    private String cpf;
+
+    /** RG */
+    private String rg;
+
+    /** Endereço */
+    private String endereco;
+
+    /** Cargo */
     private String cargo;
 
-    /** Setor ou departamento */
+    /** Setor */
     private String setor;
 
     /** E-mail */
@@ -36,13 +44,31 @@ public class FuncionarioResponseDTO {
     /** Celular */
     private String celular;
 
+    /** Salário */
+    private BigDecimal salario;
+
+    /** Indica se é supervisor */
+    private Boolean supervisor;
+
+    /**
+     * PIS do supervisor deste funcionário.
+     * Null se for supervisor ou não tiver supervisor vinculado.
+     */
+    private String supervisorPis;
+
+    /**
+     * Nome do supervisor deste funcionário.
+     * Null se for supervisor ou não tiver supervisor vinculado.
+     */
+    private String supervisorNome;
+
     /** Data de admissão no formato dd/MM/yyyy */
     private String dataAdmissao;
 
-    /** Observações gerais */
+    /** Observações */
     private String observacoes;
 
-    /** Indica se o funcionário está ativo */
+    /** Indica se está ativo */
     private Boolean ativo;
 
     /** Data de inativação no formato dd/MM/yyyy (null se ativo) */
@@ -50,12 +76,8 @@ public class FuncionarioResponseDTO {
 
     /**
      * Aviso sobre o relógio iDClass.
-     * Preenchido apenas em operações de escrita (criar, atualizar,
-     * inativar, reativar). Null em consultas.
-     *
-     * Exemplo:
-     * "Funcionario criado no banco local. Atualize tambem no relogio
-     *  iDClass via interface web: https://192.168.1.201"
+     * Preenchido apenas em operações de escrita.
+     * Null em consultas.
      */
     private String avisoRelogio;
 }

@@ -8,36 +8,47 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Repositório JPA para usuários do relógio e funcionários cadastrados.
+ * Repositório JPA para funcionários.
  */
 @Repository
-public interface UsuarioPontoRepository extends JpaRepository<UsuarioPonto, Long> {
+public interface UsuarioPontoRepository
+        extends JpaRepository<UsuarioPonto, Long> {
 
-    /** Busca pelo PIS numérico */
+    // ── Consultas básicas ─────────────────────────────────────────────────
+
     Optional<UsuarioPonto> findByPis(Long pis);
 
-    /** Busca pelo PIS formatado (12 dígitos) */
     Optional<UsuarioPonto> findByPisFormatado(String pisFormatado);
 
-    /** Busca por nome contendo o termo (case-insensitive) */
     Optional<UsuarioPonto> findByNameContainingIgnoreCase(String nome);
 
-    /** Busca por matrícula */
     Optional<UsuarioPonto> findByRegistration(Integer registration);
 
-    /** Lista todos os funcionários ativos ordenados por nome */
+    // ── Listagens ─────────────────────────────────────────────────────────
+
+    /** Lista todos os ativos ordenados por nome */
     List<UsuarioPonto> findByAtivoTrueOrderByNameAsc();
 
-    /** Busca ativos por nome contendo o termo (case-insensitive) */
-    List<UsuarioPonto> findByNameContainingIgnoreCaseAndAtivoTrue(String nome);
+    /** Busca ativos por nome parcial (case-insensitive) */
+    List<UsuarioPonto> findByNameContainingIgnoreCaseAndAtivoTrue(
+            String nome);
 
-    /** Verifica se PIS formatado já existe */
+    // ── Supervisor ────────────────────────────────────────────────────────
+
+    /** Lista todos os supervisores ativos */
+    List<UsuarioPonto> findBySupervisorTrueAndAtivoTrue();
+
+    /** Lista supervisores ativos de um setor específico */
+    List<UsuarioPonto> findBySupervisorTrueAndAtivoTrueAndSetor(
+            String setor);
+
+    /** Lista subordinados de um supervisor pelo ID */
+    List<UsuarioPonto> findBySupervisorRefId(Long supervisorId);
+
+    // ── Validações ────────────────────────────────────────────────────────
+
     boolean existsByPisFormatado(String pisFormatado);
 
-    /**
-     * Verifica se matrícula já está em uso por outro funcionário.
-     * Usado para validar unicidade na criação e atualização.
-     */
     boolean existsByRegistrationAndPisFormatadoNot(
             Integer registration, String pisFormatado);
 }

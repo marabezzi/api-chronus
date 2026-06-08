@@ -14,13 +14,16 @@ import java.util.Map;
  * Controller REST para CRUD de funcionários.
  *
  * Endpoints:
- *   GET    /api/funcionarios                → lista todos os ativos
- *   GET    /api/funcionarios/{pis}          → busca por PIS
- *   GET    /api/funcionarios/nome/{nome}    → busca por nome
- *   POST   /api/funcionarios                → cria funcionário
- *   PUT    /api/funcionarios/{pis}          → atualiza funcionário
- *   DELETE /api/funcionarios/{pis}          → inativa (soft delete)
- *   PATCH  /api/funcionarios/{pis}/reativar → reativa
+ *   GET    /api/funcionarios                        → lista todos ativos
+ *   GET    /api/funcionarios/{pis}                  → busca por PIS
+ *   GET    /api/funcionarios/nome/{nome}             → busca por nome
+ *   GET    /api/funcionarios/supervisores            → lista supervisores
+ *   GET    /api/funcionarios/supervisores/setor/{s} → supervisores por setor
+ *   GET    /api/funcionarios/{pis}/subordinados      → subordinados
+ *   POST   /api/funcionarios                        → cria
+ *   PUT    /api/funcionarios/{pis}                  → atualiza
+ *   DELETE /api/funcionarios/{pis}                  → inativa
+ *   PATCH  /api/funcionarios/{pis}/reativar         → reativa
  */
 @RestController
 @RequestMapping("/api/funcionarios")
@@ -28,6 +31,8 @@ import java.util.Map;
 public class FuncionarioController {
 
     private final FuncionarioService service;
+
+    // ── Consultas ─────────────────────────────────────────────────────────
 
     /** GET /api/funcionarios — lista todos os ativos */
     @GetMapping
@@ -60,20 +65,73 @@ public class FuncionarioController {
                 : ResponseEntity.ok(lista);
     }
 
+    /** GET /api/funcionarios/supervisores — lista todos os supervisores */
+    @GetMapping("/supervisores")
+    public ResponseEntity<?> listarSupervisores() {
+        List<FuncionarioResponseDTO> lista = service.listarSupervisores();
+        return lista.isEmpty()
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.ok(lista);
+    }
+
+    /**
+     * GET /api/funcionarios/supervisores/setor/{setor}
+     * Lista supervisores de um setor específico.
+     */
+    @GetMapping("/supervisores/setor/{setor}")
+    public ResponseEntity<?> supervisoresPorSetor(
+            @PathVariable String setor) {
+        List<FuncionarioResponseDTO> lista =
+                service.listarSupervisoresPorSetor(setor);
+        return lista.isEmpty()
+                ? ResponseEntity.status(404).body(
+                        Map.of("erro",
+                                "Nenhum supervisor no setor: " + setor))
+                : ResponseEntity.ok(lista);
+    }
+
+    /**
+     * GET /api/funcionarios/{pis}/subordinados
+     * Lista todos os subordinados de um supervisor.
+     */
+    @GetMapping("/{pis}/subordinados")
+    public ResponseEntity<?> listarSubordinados(
+            @PathVariable String pis) {
+        try {
+            List<FuncionarioResponseDTO> lista =
+                    service.listarSubordinados(pis);
+            return lista.isEmpty()
+                    ? ResponseEntity.noContent().build()
+                    : ResponseEntity.ok(lista);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404)
+                    .body(Map.of("erro", e.getMessage()));
+        }
+    }
+
+    // ── CRUD ──────────────────────────────────────────────────────────────
+
     /**
      * POST /api/funcionarios — cria novo funcionário
      *
-     * Body:
+     * Body mínimo:  { "pis": "...", "nome": "..." }
+     * Body completo:
      * {
-     *   "pis":          "099999999999",    (obrigatório)
-     *   "nome":         "JOAO DA SILVA",   (obrigatório)
-     *   "matricula":    200,
-     *   "cargo":        "Auxiliar",
-     *   "setor":        "Administrativo",
-     *   "email":        "joao@empresa.com",
-     *   "celular":      "(14) 99999-9999",
-     *   "dataAdmissao": "01012024",
-     *   "observacoes":  "Observação"
+     *   "pis":           "012345678901",
+     *   "nome":          "FULANO DE TAL",
+     *   "matricula":     100,
+     *   "cpf":           "12345678901",
+     *   "rg":            "12.345.678-9",
+     *   "endereco":      "Rua Exemplo, 100",
+     *   "cargo":         "Auxiliar",
+     *   "setor":         "Administrativo",
+     *   "email":         "fulano@empresa.com",
+     *   "celular":       "(14) 99999-9999",
+     *   "salario":       2500.00,
+     *   "supervisor":    false,
+     *   "supervisorPis": "012952592162",
+     *   "dataAdmissao":  "01012024",
+     *   "observacoes":   "Contrato temporário"
      * }
      */
     @PostMapping
