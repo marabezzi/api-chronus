@@ -669,14 +669,11 @@ public class EspelhoPdfService {
                 String agora = ZonedDateTime.now(ZoneId.of(timezone))
                         .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
 
-                Font fRodape = FontFactory.getFont(
-                        FontFactory.HELVETICA, 6, Color.GRAY);
-
-                String txt = "Chronus  |  " + espelho.getNome()
+                        String txt = "Chronus  |  " + espelho.getNome()
                         + "  |  Emitido em: " + agora
                         + "  |  Pag. " + writer.getPageNumber();
-
-                Phrase p = new Phrase(txt, fRodape);
+                
+                Phrase p = new Phrase(txt, EspelhoPdfService.F_RODAPE);  // ← usa campo estático
                 ColumnText.showTextAligned(cb, Element.ALIGN_CENTER, p,
                         (doc.left() + doc.right()) / 2,
                         doc.bottom() - 15, 0);
