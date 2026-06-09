@@ -36,6 +36,7 @@ services:
     volumes:
       # Pasta local com os logos mapeada para dentro do container
       - ./logos:/app/logos
+      - ./tratamentos:/app/tratamentos   # ← novo
     restart: unless-stopped
 
 volumes:

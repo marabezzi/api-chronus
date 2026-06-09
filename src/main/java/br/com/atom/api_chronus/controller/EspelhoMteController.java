@@ -5,7 +5,6 @@ import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
 import br.com.atom.api_chronus.dto.UsuarioDTO;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import br.com.atom.api_chronus.repository.UsuarioPontoRepository;
 import br.com.atom.api_chronus.service.EspelhoMtePdfService;
 import br.com.atom.api_chronus.service.EspelhoService;
