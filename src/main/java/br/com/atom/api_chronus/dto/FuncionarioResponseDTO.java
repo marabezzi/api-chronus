@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 
 /**
  * DTO de resposta para operações de CRUD de funcionários.
+ * Ordem dos campos deve corresponder exatamente ao toDto()
+ * do FuncionarioService.
  */
 @Data
 @NoArgsConstructor
@@ -50,17 +52,24 @@ public class FuncionarioResponseDTO {
     /** Indica se é supervisor */
     private Boolean supervisor;
 
-    /**
-     * PIS do supervisor deste funcionário.
-     * Null se for supervisor ou não tiver supervisor vinculado.
-     */
+    /** PIS do supervisor (null se for supervisor ou não tiver) */
     private String supervisorPis;
 
-    /**
-     * Nome do supervisor deste funcionário.
-     * Null se for supervisor ou não tiver supervisor vinculado.
-     */
+    /** Nome do supervisor (null se for supervisor ou não tiver) */
     private String supervisorNome;
+
+    /** Número WhatsApp com DDI+DDD. Ex: "5514999999999" */
+    private String whatsappNumero;
+
+    /** Notificações WhatsApp habilitadas */
+    private Boolean whatsappHabilitado;
+
+    /**
+     * Preferência de notificação WhatsApp:
+     *   CADA_BATIDA → mensagem a cada batida
+     *   RESUMO_DIA  → resumo diário no horário configurado
+     */
+    private String whatsappPreferencia;
 
     /** Data de admissão no formato dd/MM/yyyy */
     private String dataAdmissao;
@@ -76,8 +85,7 @@ public class FuncionarioResponseDTO {
 
     /**
      * Aviso sobre o relógio iDClass.
-     * Preenchido apenas em operações de escrita.
-     * Null em consultas.
+     * Preenchido apenas em operações de escrita. Null em consultas.
      */
     private String avisoRelogio;
 }

@@ -19,10 +19,18 @@ import java.util.stream.Collectors;
 /**
  * Serviço de CRUD de funcionários.
  *
+ * Opera exclusivamente no banco PostgreSQL local.
+ * O relógio iDClass REP não possui API de escrita —
+ * alterações devem ser replicadas manualmente via interface web.
+ *
+ * Campos gerenciados localmente:
+ *   cpf, rg, endereco, cargo, setor, email, celular, salario,
+ *   dataAdmissao, observacoes, ativo, supervisor, supervisorRef,
+ *   whatsappNumero, whatsappHabilitado, whatsappPreferencia
+ *
  * Regras de supervisor:
  *   - supervisor=true  → sem supervisorRef; pode ter subordinados
- *   - supervisor=false → pode ter supervisorRef apontando para
- *                        um supervisor ativo
+ *   - supervisor=false → pode ter supervisorRef (supervisor ativo)
  *   - Múltiplos supervisores por setor são permitidos
  *   - Ao inativar supervisor, subordinados são desvinculados
  */
@@ -100,7 +108,6 @@ public class FuncionarioService {
         UsuarioPonto supervisor = repo.findByPisFormatado(pisNorm)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Supervisor nao encontrado: " + pisNorm));
-
         return repo.findBySupervisorRefId(supervisor.getId())
                 .stream()
                 .map(this::toDto)
@@ -111,7 +118,12 @@ public class FuncionarioService {
     // CRUD
     // ─────────────────────────────────────────────────────────────────────
 
-    /** Cria novo funcionário no banco. */
+    /**
+     * Cria novo funcionário no banco.
+     *
+     * @throws IllegalArgumentException se PIS já existir,
+     *         matrícula em uso ou supervisor inválido
+     */
     @Transactional
     public FuncionarioResponseDTO criar(FuncionarioRequestDTO req) {
         String pisNorm = normalizarPis(req.getPis());
@@ -120,7 +132,6 @@ public class FuncionarioService {
             throw new IllegalArgumentException(
                     "PIS ja cadastrado: " + pisNorm);
         }
-
         if (req.getMatricula() != null
                 && repo.existsByRegistrationAndPisFormatadoNot(
                         req.getMatricula(), pisNorm)) {
@@ -134,15 +145,22 @@ public class FuncionarioService {
         entity.setUltimaSincronizacao(LocalDateTime.now());
 
         repo.save(entity);
-        log.info("Funcionario criado: {} ({}) | Supervisor: {}",
-                entity.getName(), pisNorm, entity.getSupervisor());
+        log.info("Funcionario criado: {} ({}) | Supervisor: {} | WhatsApp: {}",
+                entity.getName(), pisNorm,
+                entity.getSupervisor(),
+                entity.getWhatsappHabilitado());
 
         FuncionarioResponseDTO dto = toDto(entity);
         dto.setAvisoRelogio(avisoRelogio("criado"));
         return dto;
     }
 
-    /** Atualiza dados de um funcionário existente. */
+    /**
+     * Atualiza dados de um funcionário existente.
+     *
+     * @throws IllegalArgumentException se não encontrado,
+     *         matrícula em uso ou supervisor inválido
+     */
     @Transactional
     public FuncionarioResponseDTO atualizar(String pis,
                                              FuncionarioRequestDTO req) {
@@ -172,6 +190,7 @@ public class FuncionarioService {
 
     /**
      * Inativa um funcionário (soft delete).
+     * Preserva todo o histórico de batidas.
      * Se for supervisor, desvincula automaticamente seus subordinados.
      */
     @Transactional
@@ -204,7 +223,9 @@ public class FuncionarioService {
         return dto;
     }
 
-    /** Reativa um funcionário inativo. */
+    /**
+     * Reativa um funcionário inativo.
+     */
     @Transactional
     public FuncionarioResponseDTO reativar(String pis) {
         String pisNorm = normalizarPis(pis);
@@ -250,37 +271,46 @@ public class FuncionarioService {
         e.setSalario(req.getSalario());
         e.setObservacoes(req.getObservacoes());
 
-        // Supervisor
+        // ── Supervisor ────────────────────────────────────────────────────
         boolean isSupervisor = Boolean.TRUE.equals(req.getSupervisor());
         e.setSupervisor(isSupervisor);
 
         if (isSupervisor) {
-            // Supervisor não tem supervisorRef
             e.setSupervisorRef(null);
         } else if (req.getSupervisorPis() != null
                 && !req.getSupervisorPis().isBlank()) {
-            // Vincula ao supervisor informado
-            String supPisNorm = normalizarPis(req.getSupervisorPis());
-
-            UsuarioPonto supervisor = repo.findByPisFormatado(supPisNorm)
+            String supPis = normalizarPis(req.getSupervisorPis());
+            UsuarioPonto supervisor = repo.findByPisFormatado(supPis)
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "Supervisor nao encontrado: " + supPisNorm));
-
+                            "Supervisor nao encontrado: " + supPis));
             if (!Boolean.TRUE.equals(supervisor.getSupervisor())) {
                 throw new IllegalArgumentException(
                         "O funcionario informado nao e supervisor: "
-                        + supPisNorm);
+                        + supPis);
             }
             if (!Boolean.TRUE.equals(supervisor.getAtivo())) {
                 throw new IllegalArgumentException(
                         "O supervisor informado esta inativo: "
-                        + supPisNorm);
+                        + supPis);
             }
-
             e.setSupervisorRef(supervisor);
         }
 
-        // Data de admissão
+        // ── WhatsApp ──────────────────────────────────────────────────────
+        if (req.getWhatsappNumero() != null) {
+            String num = req.getWhatsappNumero().replaceAll("\\D", "");
+            e.setWhatsappNumero(num.isBlank() ? null : num);
+        }
+        if (req.getWhatsappHabilitado() != null) {
+            e.setWhatsappHabilitado(req.getWhatsappHabilitado());
+        }
+        if (req.getWhatsappPreferencia() != null
+                && req.getWhatsappPreferencia()
+                       .matches("CADA_BATIDA|RESUMO_DIA")) {
+            e.setWhatsappPreferencia(req.getWhatsappPreferencia());
+        }
+
+        // ── Data de admissão ──────────────────────────────────────────────
         if (req.getDataAdmissao() != null
                 && !req.getDataAdmissao().isBlank()) {
             try {
@@ -296,7 +326,6 @@ public class FuncionarioService {
     private FuncionarioResponseDTO toDto(UsuarioPonto e) {
         String supPis  = null;
         String supNome = null;
-
         if (e.getSupervisorRef() != null) {
             supPis  = e.getSupervisorRef().getPisFormatado();
             supNome = e.getSupervisorRef().getName();
@@ -317,6 +346,9 @@ public class FuncionarioService {
                 e.getSupervisor(),
                 supPis,
                 supNome,
+                e.getWhatsappNumero(),
+                e.getWhatsappHabilitado(),
+                e.getWhatsappPreferencia(),
                 e.getDataAdmissao() != null
                         ? e.getDataAdmissao().format(FMT_SAIDA) : null,
                 e.getObservacoes(),

@@ -15,7 +15,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
@@ -23,16 +26,19 @@ import java.util.Optional;
 /**
  * Serviço de sincronização entre o relógio iDClass e o banco PostgreSQL.
  *
- * Sincronizações:
- *   → A cada 1 minuto: verifica se é hora de sincronizar batidas,
- *     baseado no intervalo configurado em "sync.intervalo.minutos"
- *     (padrão: 5 minutos, configurável via /api/config)
- *   → Meia-noite: sincronização completa (batidas + usuários)
- *   → Manual: via /api/sync/completo, /api/sync/batidas, /api/sync/usuarios
+ * Agendamentos:
+ *   → A cada 1 min: verifica se é hora de sincronizar batidas
+ *     (intervalo configurável em /api/config → sync.intervalo.minutos)
+ *   → A cada 1 min: verifica se é hora de enviar resumo WhatsApp
+ *     (hora configurável em /api/config → whatsapp.resumo.hora)
+ *   → Meia-noite: sincronização completa (usuários + batidas)
  *
- * E-mail:
- *   → A cada nova batida sincronizada, envia comprovante ao funcionário
- *     se o e-mail estiver cadastrado e o envio habilitado em /api/config
+ * Notificações por nova batida:
+ *   → E-mail (se email.habilitado=true e funcionário tem e-mail)
+ *   → WhatsApp CADA_BATIDA (se whatsapp.habilitado=true e preferência)
+ *
+ * Notificações de resumo:
+ *   → WhatsApp RESUMO_DIA no horário configurado
  */
 @Slf4j
 @Service
@@ -42,28 +48,30 @@ public class SyncService {
     private final PunchLogService            punchLogService;
     private final UsuarioService             usuarioService;
     private final EmailService               emailService;
+    private final WhatsAppService            whatsAppService;
     private final ConfiguracaoService        configService;
     private final BatidaPontoRepository      batidaRepo;
     private final UsuarioPontoRepository     usuarioRepo;
     private final LogSincronizacaoRepository logRepo;
 
-    /** Momento da última sincronização de batidas */
+    /** Controle do intervalo de sync (evita runs desnecessários) */
     private LocalDateTime ultimaSyncBatidas = null;
+
+    /** Controle para não enviar resumo duas vezes no mesmo horário */
+    private int ultimoResumoHora = -1;
 
     // ─────────────────────────────────────────────────────────────────────
     // AGENDAMENTOS
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Verifica a cada 1 minuto se é hora de sincronizar.
-     * O intervalo real é lido da configuração "sync.intervalo.minutos".
-     * Padrão: 5 minutos. Configurável em /api/config.
+     * Verifica a cada 1 minuto se é hora de sincronizar batidas.
+     * O intervalo real é lido de /api/config → sync.intervalo.minutos
+     * Padrão: 5 minutos. Não bloqueia se sync estiver desabilitado.
      */
     @Scheduled(fixedDelay = 60_000)
     public void verificarSincronizacaoAutomatica() {
-        if (!configService.isSyncHabilitado()) {
-            return;
-        }
+        if (!configService.isSyncHabilitado()) return;
 
         int intervaloMin = configService.getSyncIntervalo();
 
@@ -72,10 +80,43 @@ public class SyncService {
                         ultimaSyncBatidas,
                         LocalDateTime.now()) >= intervaloMin) {
 
-            log.info("Iniciando sincronizacao automatica " +
-                    "(intervalo: {} min)", intervaloMin);
+            log.info("Sincronizacao automatica (intervalo: {} min)",
+                    intervaloMin);
             sincronizarBatidas();
             ultimaSyncBatidas = LocalDateTime.now();
+        }
+    }
+
+    /**
+     * Verifica a cada 1 minuto se é hora de enviar o resumo diário.
+     * Horário configurável em /api/config → whatsapp.resumo.hora
+     * Padrão: 18h. Envia apenas uma vez por hora.
+     */
+    @Scheduled(fixedDelay = 60_000)
+    public void verificarResumoDiario() {
+        if (!configService.isWhatsappHabilitado()) return;
+
+        int horaConfigurada = configService.getWhatsappResumoHora();
+        ZonedDateTime agora = ZonedDateTime.now(
+                ZoneId.of(configService.getTimezone()));
+
+        int horaAtual   = agora.getHour();
+        int minutoAtual = agora.getMinute();
+
+        // Dispara apenas no primeiro minuto da hora configurada
+        if (horaAtual == horaConfigurada
+                && minutoAtual == 0
+                && ultimoResumoHora != horaAtual) {
+
+            log.info("Enviando resumo diario WhatsApp ({}h)...",
+                    horaConfigurada);
+            enviarResumosDiarios();
+            ultimoResumoHora = horaAtual;
+        }
+
+        // Reset do controle à meia-noite
+        if (horaAtual == 0) {
+            ultimoResumoHora = -1;
         }
     }
 
@@ -91,17 +132,17 @@ public class SyncService {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // MÉTODOS PÚBLICOS (chamados pelo controller e agendamentos)
+    // MÉTODOS PÚBLICOS
     // ─────────────────────────────────────────────────────────────────────
 
     /**
      * Sincronização completa: usuários + batidas.
+     * Chamado pelo controller e pelo agendamento diário.
      */
     @Transactional
     public LogSincronizacao sincronizarCompleto() {
         LogSincronizacao ls = iniciarLog("COMPLETA");
         int total = 0;
-
         try {
             total += sincronizarUsuariosInterno();
             total += sincronizarBatidasInterno(ls);
@@ -115,7 +156,8 @@ public class SyncService {
     }
 
     /**
-     * Sincroniza somente batidas (incremental).
+     * Sincroniza somente batidas (incremental por NSR).
+     * Chamado pelo controller e pelo agendamento automático.
      */
     @Transactional
     public LogSincronizacao sincronizarBatidas() {
@@ -133,6 +175,7 @@ public class SyncService {
 
     /**
      * Sincroniza somente usuários.
+     * Chamado pelo controller.
      */
     @Transactional
     public LogSincronizacao sincronizarUsuarios() {
@@ -153,7 +196,8 @@ public class SyncService {
 
     /**
      * Sincroniza usuários do relógio → banco.
-     * Atualiza existentes e insere novos.
+     * Insere novos e atualiza campos do relógio nos existentes.
+     * Preserva campos locais (cargo, setor, email, whatsapp, etc.).
      */
     private int sincronizarUsuariosInterno() {
         log.info("Sincronizando usuarios...");
@@ -170,6 +214,7 @@ public class SyncService {
                     usuarioRepo.findByPis(dto.getPis());
             UsuarioPonto entity = existente.orElse(new UsuarioPonto());
 
+            // Campos do relógio
             entity.setPis(dto.getPis());
             entity.setPisFormatado(dto.getPisFormatado());
             entity.setName(dto.getName());
@@ -180,10 +225,12 @@ public class SyncService {
             entity.setRegistration(dto.getRegistration());
             entity.setUltimaSincronizacao(LocalDateTime.now());
 
-            // Preserva campos locais se já existir
+            // Campos locais — inicializa apenas se novo registro
             if (existente.isEmpty()) {
                 entity.setAtivo(true);
                 entity.setSupervisor(false);
+                entity.setWhatsappHabilitado(false);
+                entity.setWhatsappPreferencia("CADA_BATIDA");
             }
 
             usuarioRepo.save(entity);
@@ -196,26 +243,25 @@ public class SyncService {
 
     /**
      * Sincroniza batidas de forma incremental.
-     * Busca apenas NSR maior que o último salvo.
-     * Para cada nova batida, envia e-mail se habilitado.
+     * Busca apenas NSR maior que o último salvo no banco.
+     * Para cada nova batida: envia e-mail e/ou WhatsApp CADA_BATIDA.
      */
     private int sincronizarBatidasInterno(LogSincronizacao ls) {
         Long ultimoNsr = batidaRepo.findMaxNsr().orElse(0L);
-        log.info("Sincronizando batidas. Ultimo NSR no banco: {}",
-                ultimoNsr);
+        log.info("Ultimo NSR no banco: {}", ultimoNsr);
 
         AfdResponseDTO afd =
                 punchLogService.buscarBatidas(ultimoNsr + 1);
 
         if (afd == null || afd.getBatidas() == null
                 || afd.getBatidas().isEmpty()) {
-            log.info("Nenhuma batida nova desde NSR {}.", ultimoNsr);
+            log.info("Nenhuma batida nova.");
             ls.setUltimoNsr(ultimoNsr);
             return 0;
         }
 
-        int count = 0;
-        long maiorNsr = ultimoNsr;
+        int count   = 0;
+        long maxNsr = ultimoNsr;
 
         for (AfdLineDTO dto : afd.getBatidas()) {
             if (!batidaRepo.existsByNsr(dto.getNsr())) {
@@ -233,28 +279,34 @@ public class SyncService {
                 batidaRepo.save(entity);
                 count++;
 
-                if (dto.getNsr() > maiorNsr) maiorNsr = dto.getNsr();
+                if (dto.getNsr() > maxNsr) maxNsr = dto.getNsr();
 
-                // Envia comprovante por e-mail
-                enviarComprovanteEmail(entity);
+                // Notifica o funcionário
+                notificarFuncionario(entity);
             }
         }
 
-        ls.setUltimoNsr(maiorNsr);
-        log.info("Batidas novas: {} | Maior NSR: {}", count, maiorNsr);
+        ls.setUltimoNsr(maxNsr);
+        log.info("Batidas novas sincronizadas: {} | Maior NSR: {}",
+                count, maxNsr);
         return count;
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // NOTIFICAÇÕES
+    // ─────────────────────────────────────────────────────────────────────
+
     /**
-     * Envia comprovante por e-mail ao funcionário.
-     * Só envia se:
-     *   1. E-mail habilitado em /api/config
-     *   2. Funcionário tem e-mail cadastrado
-     * Marca email_enviado=true em ambos os casos para não repetir.
+     * Notifica o funcionário sobre a nova batida.
+     * Tenta e-mail e/ou WhatsApp CADA_BATIDA conforme configuração.
+     * Marca email_enviado=true independente do resultado.
      */
-    private void enviarComprovanteEmail(BatidaPonto batida) {
+    private void notificarFuncionario(BatidaPonto batida) {
         try {
-            if (!configService.isEmailHabilitado()) {
+            boolean emailOn   = configService.isEmailHabilitado();
+            boolean whatsOn   = configService.isWhatsappHabilitado();
+
+            if (!emailOn && !whatsOn) {
                 batida.setEmailEnviado(true);
                 batidaRepo.save(batida);
                 return;
@@ -263,22 +315,95 @@ public class SyncService {
             usuarioRepo.findByPisFormatado(batida.getPis())
                     .ifPresentOrElse(
                         usuario -> {
-                            emailService.enviarComprovante(
-                                    batida, usuario);
+                            // E-mail
+                            if (emailOn) {
+                                try {
+                                    emailService.enviarComprovante(
+                                            batida, usuario);
+                                } catch (Exception e) {
+                                    log.warn("Falha e-mail NSR {}: {}",
+                                            batida.getNsr(),
+                                            e.getMessage());
+                                }
+                            }
+
+                            // WhatsApp — somente CADA_BATIDA
+                            if (whatsOn && Boolean.TRUE.equals(
+                                    usuario.getWhatsappHabilitado())
+                                    && "CADA_BATIDA".equals(
+                                            usuario.getWhatsappPreferencia())) {
+                                try {
+                                    whatsAppService
+                                            .enviarComprovanteBatida(
+                                                    batida, usuario);
+                                } catch (Exception e) {
+                                    log.warn("Falha WhatsApp NSR {}: {}",
+                                            batida.getNsr(),
+                                            e.getMessage());
+                                }
+                            }
+
                             batida.setEmailEnviado(true);
                             batidaRepo.save(batida);
                         },
                         () -> {
-                            log.debug("PIS {} sem cadastro.",
+                            log.debug("PIS {} sem cadastro local.",
                                     batida.getPis());
                             batida.setEmailEnviado(true);
                             batidaRepo.save(batida);
                         }
                     );
+
         } catch (Exception e) {
-            log.warn("Erro ao enviar comprovante NSR {}: {}",
+            log.warn("Erro ao notificar NSR {}: {}",
                     batida.getNsr(), e.getMessage());
         }
+    }
+
+    /**
+     * Envia resumo diário via WhatsApp para todos os funcionários
+     * com preferência RESUMO_DIA e WhatsApp habilitado.
+     * Chamado automaticamente no horário configurado.
+     */
+    private void enviarResumosDiarios() {
+        ZoneId zone = ZoneId.of(configService.getTimezone());
+        LocalDate hoje = LocalDate.now(zone);
+        LocalDateTime inicioDia = hoje.atStartOfDay();
+        LocalDateTime fimDia    = hoje.atTime(23, 59, 59);
+
+        List<UsuarioPonto> funcionarios =
+                usuarioRepo.findByAtivoTrueOrderByNameAsc();
+
+        int enviados = 0;
+        for (UsuarioPonto usuario : funcionarios) {
+            if (!Boolean.TRUE.equals(usuario.getWhatsappHabilitado()))
+                continue;
+            if (!"RESUMO_DIA".equals(
+                    usuario.getWhatsappPreferencia()))
+                continue;
+            if (usuario.getWhatsappNumero() == null
+                    || usuario.getWhatsappNumero().isBlank())
+                continue;
+
+            List<BatidaPonto> batidosHoje =
+                    batidaRepo.findByPisAndDateTimeBetweenOrderByDateTimeAsc(
+                            usuario.getPisFormatado(),
+                            inicioDia, fimDia);
+
+            if (!batidosHoje.isEmpty()) {
+                try {
+                    whatsAppService.enviarResumoDiario(
+                            usuario, batidosHoje);
+                    enviados++;
+                } catch (Exception e) {
+                    log.warn("Falha resumo WhatsApp {}: {}",
+                            usuario.getName(), e.getMessage());
+                }
+            }
+        }
+
+        log.info("Resumos diarios enviados: {}/{}", enviados,
+                funcionarios.size());
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -295,7 +420,8 @@ public class SyncService {
     }
 
     private LogSincronizacao finalizarLog(LogSincronizacao ls,
-                                           String status, int total,
+                                           String status,
+                                           int total,
                                            String mensagem) {
         ls.setStatus(status);
         ls.setDataFim(LocalDateTime.now());

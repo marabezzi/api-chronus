@@ -137,4 +137,27 @@ public class UsuarioPonto {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "supervisor_id")
     private UsuarioPonto supervisorRef;
+
+
+    /**
+ * Número WhatsApp com DDI+DDD.
+ * Exemplo: "5514999999999" = +55 (14) 99999-9999
+ */
+@Column(name = "whatsapp_numero", length = 20)
+private String whatsappNumero;
+
+/**
+ * Indica se o funcionário quer receber notificações no WhatsApp.
+ * Configurável pelo próprio funcionário ou pelo gestor.
+ */
+@Column(name = "whatsapp_habilitado", nullable = false)
+private Boolean whatsappHabilitado = false;
+
+/**
+ * Preferência de notificação:
+ *   CADA_BATIDA → mensagem a cada registro de ponto
+ *   RESUMO_DIA  → resumo único no horário configurado
+ */
+@Column(name = "whatsapp_preferencia", length = 20)
+private String whatsappPreferencia = "CADA_BATIDA";
 }

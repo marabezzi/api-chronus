@@ -115,6 +115,23 @@ public class ConfiguracaoService {
                 "Nome da aplicação exibido nos e-mails e PDFs",
                 "GERAL", false);
 
+                // WHATSAPP
+        salvarPadrao("whatsapp.habilitado",         "false",
+        "Habilita notificacoes WhatsApp via Evolution API",
+        "WHATSAPP", false);
+        salvarPadrao("whatsapp.evolution.url",      "http://evolution-api:8080",
+        "URL da Evolution API",
+        "WHATSAPP", false);
+        salvarPadrao("whatsapp.evolution.apikey",   "chronus_evolution_key",
+        "API Key da Evolution API",
+        "WHATSAPP", true);
+        salvarPadrao("whatsapp.evolution.instancia","chronus",
+        "Nome da instancia no Evolution API",
+        "WHATSAPP", false);
+        salvarPadrao("whatsapp.resumo.hora",        "18",
+        "Hora de envio do resumo diario (0-23)",
+        "WHATSAPP", false);
+
         log.info("Configurações do sistema inicializadas.");
     }
 
@@ -175,6 +192,24 @@ public class ConfiguracaoService {
     public String  getEmpresaEndereco() { return get(EMP_ENDERECO, "");               }
     public String  getEmpresaCei()      { return get(EMP_CEI, "000000000000");         }
     public String  getEmpresaNumFab()   { return get(EMP_NUM_FAB, "00000000000000000");}
+
+    public boolean isWhatsappHabilitado() {
+        return getBool("whatsapp.habilitado", false);
+    }
+    public String getWhatsappUrl() {
+        return get("whatsapp.evolution.url",
+                "http://evolution-api:8080");
+    }
+    public String getWhatsappApiKey() {
+        return get("whatsapp.evolution.apikey",
+                "chronus_evolution_key");
+    }
+    public String getWhatsappInstancia() {
+        return get("whatsapp.evolution.instancia", "chronus");
+    }
+    public int getWhatsappResumoHora() {
+        return getInt("whatsapp.resumo.hora", 18);
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // ATUALIZAÇÃO

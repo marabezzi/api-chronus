@@ -70,4 +70,25 @@ public class FuncionarioRequestDTO {
 
     /** Observações gerais */
     private String observacoes;
+
+
+    /**
+     * Número WhatsApp com DDI+DDD (somente dígitos).
+     * Exemplo: "5514999999999"
+     */
+    private String whatsappNumero;
+
+    /**
+     * Habilita notificações WhatsApp para este funcionário.
+     * Default: false.
+     */
+    private Boolean whatsappHabilitado = false;
+
+    /**
+     * Preferência de notificação:
+     *   CADA_BATIDA → mensagem a cada batida
+     *   RESUMO_DIA  → resumo diário no horário configurado
+     * Default: CADA_BATIDA
+     */
+    private String whatsappPreferencia = "CADA_BATIDA";
 }
