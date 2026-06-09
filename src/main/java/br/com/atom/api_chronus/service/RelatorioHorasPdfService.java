@@ -56,8 +56,6 @@ public class RelatorioHorasPdfService {
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, AZUL_ESCURO);
     private static final Font F_VALOR =
             FontFactory.getFont(FontFactory.HELVETICA, 8, PRETO);
-    private static final Font F_CAB_TAB =
-            FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7, BRANCO);
     private static final Font F_CAB_TAB_DARK =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7, AZUL_ESCURO);
     private static final Font F_CELULA =
@@ -72,10 +70,6 @@ public class RelatorioHorasPdfService {
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, BRANCO);
     private static final Font F_TOTAL_VAL =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 16, BRANCO);
-    private static final Font F_ENTRADA =
-            FontFactory.getFont(FontFactory.HELVETICA, 7, VERDE);
-    private static final Font F_SAIDA =
-            FontFactory.getFont(FontFactory.HELVETICA, 7, AZUL_MEDIO);
 
     // ─────────────────────────────────────────────────────────────────────
     // 1. TODOS OS FUNCIONÁRIOS

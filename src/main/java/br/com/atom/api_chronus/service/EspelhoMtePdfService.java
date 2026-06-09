@@ -5,8 +5,7 @@ import br.com.atom.api_chronus.config.LogoConfig;
 import br.com.atom.api_chronus.dto.EspelhoDiaDTO;
 import br.com.atom.api_chronus.dto.EspelhoMarcacaoDTO;
 import br.com.atom.api_chronus.dto.EspelhoResponseDTO;
-import com.lowagie.text.pdf.PdfCopy;
-import com.lowagie.text.pdf.PdfReader;
+
 import java.util.List;
 import br.com.atom.api_chronus.repository.UsuarioPontoRepository;
 import com.lowagie.text.*;
@@ -22,7 +21,6 @@ import java.io.File;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 
 /**
  * Gera o PDF do Espelho de Ponto FIEL ao Anexo II da Portaria 1510/MTE.
@@ -69,8 +67,6 @@ public class EspelhoMtePdfService {
             FontFactory.getFont(FontFactory.HELVETICA, 7, PRETO);
     private static final Font F_BRANCO_7 =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7, BRANCO);
-    private static final Font F_CINZA_6 =
-            FontFactory.getFont(FontFactory.HELVETICA, 6, Color.GRAY);
     private static final Font F_VERM_7 =
             FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7, VERMELHO);
     private static final Font F_VERDE_7 =
@@ -393,7 +389,7 @@ public class EspelhoMtePdfService {
     // ─────────────────────────────────────────────────────────────────────
     // SEÇÃO 5 — TOTALIZADORES
     // ─────────────────────────────────────────────────────────────────────
-
+    @SuppressWarnings("null")
     private PdfPTable gerarTotalizadores(EspelhoResponseDTO espelho)
             throws DocumentException {
 
@@ -666,55 +662,43 @@ public class EspelhoMtePdfService {
          * @param df       dataFinal   ddMMyyyy
          * @return bytes do PDF consolidado
      */
-        public byte[] gerarTodos(List<EspelhoResponseDTO> espelhos,
-                String di, String df) {
-        if (espelhos == null || espelhos.isEmpty()) return null;
+       public byte[] gerarTodos(List<EspelhoResponseDTO> espelhos,
+                          String di, String df) {
+    if (espelhos == null || espelhos.isEmpty()) return null;
 
-        try {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        Document doc = new Document();
-        PdfCopy copy = new PdfCopy(doc, out);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    Document doc = new Document();
+
+    try (PdfCopy copy = new PdfCopy(doc, out)) {
         doc.open();
 
         int gerados = 0;
         for (EspelhoResponseDTO espelho : espelhos) {
-        if (espelho == null || espelho.getDias() == null
-        || espelho.getDias().isEmpty()) {
-        log.debug("Sem ponto no período: {}", espelho != null
-        ? espelho.getNome() : "null");
-        continue;
-        }
+            if (espelho == null || espelho.getDias() == null
+                    || espelho.getDias().isEmpty()) continue;
 
-        byte[] individual = gerar(espelho, di, df);
-        if (individual == null) {
-        log.warn("Falha ao gerar PDF de: {}", espelho.getNome());
-        continue;
-        }
+            byte[] individual = gerar(espelho, di, df);
+            if (individual == null) continue;
 
-        PdfReader reader = new PdfReader(individual);
-        for (int p = 1; p <= reader.getNumberOfPages(); p++) {
-        copy.addPage(copy.getImportedPage(reader, p));
-        }
-        reader.close();
-        gerados++;
-        log.debug("PDF adicionado: {}", espelho.getNome());
+            PdfReader reader = new PdfReader(individual);
+            for (int p = 1; p <= reader.getNumberOfPages(); p++) {
+                copy.addPage(copy.getImportedPage(reader, p));
+            }
+            reader.close();
+            gerados++;
         }
 
         doc.close();
 
-        if (gerados == 0) {
-        log.warn("Nenhum funcionario com ponto no período {} a {}",
-        di, df);
-        return null;
-        }
+        if (gerados == 0) return null;
 
-        log.info("PDF todos funcionarios gerado: {} espelhos | {} a {}",
-        gerados, di, df);
+        log.info("PDF todos gerado: {} espelhos | {} a {}",
+                gerados, di, df);
         return out.toByteArray();
 
-        } catch (Exception e) {
+    } catch (Exception e) {
         log.error("Erro ao gerar PDF todos: {}", e.getMessage(), e);
         return null;
-        }
-        }
+    }
+}
 }

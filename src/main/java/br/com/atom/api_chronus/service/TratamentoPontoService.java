@@ -198,6 +198,7 @@ public class TratamentoPontoService {
     }
 
     /** Retorna o content-type do documento. */
+    @SuppressWarnings("null")
     public String getTipoDocumento(Long id) {
         return tratamentoRepo.findById(id)
                 .map(TratamentoPonto::getDocumentoTipo)
@@ -205,6 +206,7 @@ public class TratamentoPontoService {
     }
 
     /** Retorna o nome do documento. */
+    @SuppressWarnings("null")
     public String getNomeDocumento(Long id) {
         return tratamentoRepo.findById(id)
                 .map(TratamentoPonto::getDocumentoNome)
@@ -305,7 +307,8 @@ public class TratamentoPontoService {
         if (nome == null) return "documento";
         return nome.replaceAll("[^a-zA-Z0-9._-]", "_");
     }
-
+    
+    @SuppressWarnings("null")
     private String nomeFuncionario(String pisFormatado) {
         return usuarioRepo.findByPisFormatado(pisFormatado)
                 .map(UsuarioPonto::getName)

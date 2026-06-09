@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
  *
  * Especificação: Portaria 1510/2009 MTE, Anexo I, seção 2.
  */
+@SuppressWarnings("null")
 @Slf4j
 @Service
 @RequiredArgsConstructor

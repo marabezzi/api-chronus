@@ -146,6 +146,7 @@ public class ConfiguracaoService {
     }
 
     /** Lista todas as configurações agrupadas por categoria. */
+    @SuppressWarnings("null")
     public Map<String, List<ConfiguracaoSistema>> listarTodas() {
         return repo.findAll().stream()
                 .collect(Collectors.groupingBy(
@@ -153,6 +154,7 @@ public class ConfiguracaoService {
     }
 
     /** Lê o valor de uma configuração. Retorna o padrão se não existir. */
+    @SuppressWarnings("null")
     public String get(String chave, String padrao) {
         return repo.findByChave(chave)
                 .map(ConfiguracaoSistema::getValor)

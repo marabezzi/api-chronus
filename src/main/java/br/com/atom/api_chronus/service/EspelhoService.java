@@ -60,6 +60,7 @@ public class EspelhoService {
      * @param request PIS + dataInicial + dataFinal
      * @return EspelhoResponseDTO completo
      */
+    @SuppressWarnings("null")
     public EspelhoResponseDTO gerar(EspelhoRequestDTO request) {
 
         // ── 1. Valida e normaliza o PIS ───────────────────────────────────

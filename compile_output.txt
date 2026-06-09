@@ -1,0 +1,23 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ----------------------< br.com.atom:api-chronus >-----------------------
+[INFO] Building api-chronus 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- clean:3.5.0:clean (default-clean) @ api-chronus ---
+[INFO] Deleting C:\Sistemas\ws-spring\api-chronus\target
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ api-chronus ---
+[INFO] Copying 3 resources from src\main\resources to target\classes
+[INFO] Copying 0 resource from src\main\resources to target\classes
+[INFO] 
+[INFO] --- compiler:3.14.1:compile (default-compile) @ api-chronus ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 66 source files with javac [debug parameters release 21] to target\classes
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  10.303 s
+[INFO] Finished at: 2026-06-09T14:19:21-03:00
+[INFO] ------------------------------------------------------------------------

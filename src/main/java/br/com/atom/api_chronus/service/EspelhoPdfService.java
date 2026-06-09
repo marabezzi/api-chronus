@@ -377,6 +377,7 @@ public class EspelhoPdfService {
     /**
      * 5. Totalizadores do período.
      */
+    @SuppressWarnings("null")
     private PdfPTable gerarTotalizadores(EspelhoResponseDTO espelho)
             throws DocumentException {
 

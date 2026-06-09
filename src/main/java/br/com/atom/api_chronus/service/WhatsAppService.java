@@ -42,8 +42,6 @@ public class WhatsAppService {
             DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter FMT_DATA =
             DateTimeFormatter.ofPattern("dd/MM/yyyy");
-    private static final DateTimeFormatter FMT_DT =
-            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
     // ─────────────────────────────────────────────────────────────────────
     // COMPROVANTE DE BATIDA

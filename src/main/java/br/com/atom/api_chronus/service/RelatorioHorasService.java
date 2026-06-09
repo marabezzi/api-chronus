@@ -52,6 +52,7 @@ public class RelatorioHorasService {
      * @param dataInicial ddMMyyyy
      * @param dataFinal   ddMMyyyy
      */
+    @SuppressWarnings("null")
     public RelatorioHorasResponseDTO gerarTodos(
             String dataInicial, String dataFinal) {
 
@@ -123,7 +124,7 @@ public class RelatorioHorasService {
     // ─────────────────────────────────────────────────────────────────────
     // IMPLEMENTAÇÃO INTERNA
     // ─────────────────────────────────────────────────────────────────────
-
+    @SuppressWarnings("null")
     private RelatorioHorasFuncionarioDTO gerarParaFuncionario(
             String pis, LocalDate inicio, LocalDate fim) {
 
