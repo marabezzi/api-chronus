@@ -3,11 +3,6 @@ package br.com.atom.api_chronus.entity;
 import java.time.LocalDateTime;
 
 import jakarta.persistence.*;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -67,4 +62,11 @@ public class BatidaPonto {
     /** Momento em que o registro foi inserido no banco */
     @Column(name = "criado_em", nullable = false, updatable = false)
     private LocalDateTime criadoEm = LocalDateTime.now();
+
+   /**
+     * Indica se o comprovante por e-mail já foi enviado.
+     * Evita reenvio em sincronizações subsequentes.
+     */
+    @Column(name = "email_enviado", nullable = false)
+    private Boolean emailEnviado = false; 
 }

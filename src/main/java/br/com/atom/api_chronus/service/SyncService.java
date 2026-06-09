@@ -1,12 +1,5 @@
 package br.com.atom.api_chronus.service;
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
-
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
-
 import br.com.atom.api_chronus.dto.AfdLineDTO;
 import br.com.atom.api_chronus.dto.AfdResponseDTO;
 import br.com.atom.api_chronus.dto.UsuarioDTO;
@@ -16,128 +9,165 @@ import br.com.atom.api_chronus.entity.UsuarioPonto;
 import br.com.atom.api_chronus.repository.BatidaPontoRepository;
 import br.com.atom.api_chronus.repository.LogSincronizacaoRepository;
 import br.com.atom.api_chronus.repository.UsuarioPontoRepository;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Optional;
 
 /**
- * Serviço de sincronização entre o relógio iDClass e o banco de dados.
+ * Serviço de sincronização entre o relógio iDClass e o banco PostgreSQL.
  *
- * Executa dois tipos de sincronização:
+ * Sincronizações:
+ *   → A cada 1 minuto: verifica se é hora de sincronizar batidas,
+ *     baseado no intervalo configurado em "sync.intervalo.minutos"
+ *     (padrão: 5 minutos, configurável via /api/config)
+ *   → Meia-noite: sincronização completa (batidas + usuários)
+ *   → Manual: via /api/sync/completo, /api/sync/batidas, /api/sync/usuarios
  *
- *   1. AFD (batidas):
- *      - Busca o maior NSR já salvo no banco
- *      - Solicita ao relógio somente os registros a partir desse NSR
- *      - Insere apenas os registros novos (evita duplicatas pelo NSR)
- *      - Sincronização incremental — eficiente mesmo com 25.000 registros
- *
- *   2. Usuários:
- *      - Busca todos os usuários do relógio
- *      - Atualiza os existentes (pelo PIS) e insere os novos
- *      - Sincronização completa — poucos registros (~8 usuários)
- *
- * Agendamento: todos os dias à meia-noite (00:00).
- * Também pode ser disparado manualmente via SyncController.
+ * E-mail:
+ *   → A cada nova batida sincronizada, envia comprovante ao funcionário
+ *     se o e-mail estiver cadastrado e o envio habilitado em /api/config
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SyncService {
 
-    private final PunchLogService           punchLogService;
-    private final UsuarioService            usuarioService;
-    private final BatidaPontoRepository     batidaRepo;
-    private final UsuarioPontoRepository    usuarioRepo;
+    private final PunchLogService            punchLogService;
+    private final UsuarioService             usuarioService;
+    private final EmailService               emailService;
+    private final ConfiguracaoService        configService;
+    private final BatidaPontoRepository      batidaRepo;
+    private final UsuarioPontoRepository     usuarioRepo;
     private final LogSincronizacaoRepository logRepo;
 
-    // ── Agendamento automático ────────────────────────────────────────────
+    /** Momento da última sincronização de batidas */
+    private LocalDateTime ultimaSyncBatidas = null;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AGENDAMENTOS
+    // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Sincronização completa agendada para meia-noite todos os dias.
-     * Cron: "0 0 0 * * *" = segundo 0, minuto 0, hora 0, todo dia
+     * Verifica a cada 1 minuto se é hora de sincronizar.
+     * O intervalo real é lido da configuração "sync.intervalo.minutos".
+     * Padrão: 5 minutos. Configurável em /api/config.
      */
-    @Scheduled(cron = "0 0 0 * * *")
-    public void sincronizacaoAutomatica() {
-        log.info("=== Iniciando sincronização automática (meia-noite) ===");
-        sincronizarCompleto();
+    @Scheduled(fixedDelay = 60_000)
+    public void verificarSincronizacaoAutomatica() {
+        if (!configService.isSyncHabilitado()) {
+            return;
+        }
+
+        int intervaloMin = configService.getSyncIntervalo();
+
+        if (ultimaSyncBatidas == null
+                || ChronoUnit.MINUTES.between(
+                        ultimaSyncBatidas,
+                        LocalDateTime.now()) >= intervaloMin) {
+
+            log.info("Iniciando sincronizacao automatica " +
+                    "(intervalo: {} min)", intervaloMin);
+            sincronizarBatidas();
+            ultimaSyncBatidas = LocalDateTime.now();
+        }
     }
 
-    // ── Métodos públicos (chamados pelo controller) ───────────────────────
+    /**
+     * Sincronização completa diária à meia-noite.
+     * Sincroniza usuários + batidas.
+     */
+    @Scheduled(cron = "0 0 0 * * *")
+    public void sincronizacaoCompletaDiaria() {
+        log.info("=== Sincronizacao completa diaria (meia-noite) ===");
+        sincronizarCompleto();
+        ultimaSyncBatidas = LocalDateTime.now();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // MÉTODOS PÚBLICOS (chamados pelo controller e agendamentos)
+    // ─────────────────────────────────────────────────────────────────────
 
     /**
      * Sincronização completa: usuários + batidas.
-     *
-     * @return log da sincronização
      */
     @Transactional
     public LogSincronizacao sincronizarCompleto() {
-        LogSincronizacao log_sync = iniciarLog("COMPLETA");
+        LogSincronizacao ls = iniciarLog("COMPLETA");
         int total = 0;
 
         try {
             total += sincronizarUsuariosInterno();
-            total += sincronizarBatidasInterno(log_sync);
-
-            return finalizarLog(log_sync, "SUCESSO", total, null);
+            total += sincronizarBatidasInterno(ls);
+            ultimaSyncBatidas = LocalDateTime.now();
+            return finalizarLog(ls, "SUCESSO", total, null);
         } catch (Exception e) {
-            log.error("Erro na sincronização completa: {}", e.getMessage(), e);
-            return finalizarLog(log_sync, "ERRO", total, e.getMessage());
+            log.error("Erro na sincronizacao completa: {}",
+                    e.getMessage(), e);
+            return finalizarLog(ls, "ERRO", total, e.getMessage());
         }
     }
 
     /**
-     * Sincroniza apenas os usuários do relógio.
-     *
-     * @return log da sincronização
-     */
-    @Transactional
-    public LogSincronizacao sincronizarUsuarios() {
-        LogSincronizacao log_sync = iniciarLog("USUARIOS");
-        try {
-            int total = sincronizarUsuariosInterno();
-            return finalizarLog(log_sync, "SUCESSO", total, null);
-        } catch (Exception e) {
-            log.error("Erro ao sincronizar usuários: {}", e.getMessage(), e);
-            return finalizarLog(log_sync, "ERRO", 0, e.getMessage());
-        }
-    }
-
-    /**
-     * Sincroniza apenas as batidas de ponto (incremental).
-     *
-     * @return log da sincronização
+     * Sincroniza somente batidas (incremental).
      */
     @Transactional
     public LogSincronizacao sincronizarBatidas() {
-        LogSincronizacao log_sync = iniciarLog("AFD");
+        LogSincronizacao ls = iniciarLog("AFD");
         try {
-            int total = sincronizarBatidasInterno(log_sync);
-            return finalizarLog(log_sync, "SUCESSO", total, null);
+            int total = sincronizarBatidasInterno(ls);
+            ultimaSyncBatidas = LocalDateTime.now();
+            return finalizarLog(ls, "SUCESSO", total, null);
         } catch (Exception e) {
-            log.error("Erro ao sincronizar batidas: {}", e.getMessage(), e);
-            return finalizarLog(log_sync, "ERRO", 0, e.getMessage());
+            log.error("Erro ao sincronizar batidas: {}",
+                    e.getMessage(), e);
+            return finalizarLog(ls, "ERRO", 0, e.getMessage());
         }
     }
 
-    // ── Implementações internas ───────────────────────────────────────────
+    /**
+     * Sincroniza somente usuários.
+     */
+    @Transactional
+    public LogSincronizacao sincronizarUsuarios() {
+        LogSincronizacao ls = iniciarLog("USUARIOS");
+        try {
+            int total = sincronizarUsuariosInterno();
+            return finalizarLog(ls, "SUCESSO", total, null);
+        } catch (Exception e) {
+            log.error("Erro ao sincronizar usuarios: {}",
+                    e.getMessage(), e);
+            return finalizarLog(ls, "ERRO", 0, e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // IMPLEMENTAÇÕES INTERNAS
+    // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Sincroniza usuários do relógio para o banco.
+     * Sincroniza usuários do relógio → banco.
      * Atualiza existentes e insere novos.
      */
     private int sincronizarUsuariosInterno() {
-        log.info("Sincronizando usuários...");
+        log.info("Sincronizando usuarios...");
         List<UsuarioDTO> usuarios = usuarioService.listarTodos();
 
         if (usuarios.isEmpty()) {
-            log.warn("Nenhum usuário retornado pelo relógio.");
+            log.warn("Nenhum usuario retornado pelo relogio.");
             return 0;
         }
 
         int count = 0;
         for (UsuarioDTO dto : usuarios) {
-            // Busca pelo PIS — atualiza se existir, insere se não existir
-            Optional<UsuarioPonto> existente = usuarioRepo.findByPis(dto.getPis());
+            Optional<UsuarioPonto> existente =
+                    usuarioRepo.findByPis(dto.getPis());
             UsuarioPonto entity = existente.orElse(new UsuarioPonto());
 
             entity.setPis(dto.getPis());
@@ -150,29 +180,37 @@ public class SyncService {
             entity.setRegistration(dto.getRegistration());
             entity.setUltimaSincronizacao(LocalDateTime.now());
 
+            // Preserva campos locais se já existir
+            if (existente.isEmpty()) {
+                entity.setAtivo(true);
+                entity.setSupervisor(false);
+            }
+
             usuarioRepo.save(entity);
             count++;
         }
 
-        log.info("Usuários sincronizados: {}", count);
+        log.info("Usuarios sincronizados: {}", count);
         return count;
     }
 
     /**
-     * Sincroniza batidas de ponto de forma incremental.
-     * Busca apenas registros com NSR maior que o último sincronizado.
+     * Sincroniza batidas de forma incremental.
+     * Busca apenas NSR maior que o último salvo.
+     * Para cada nova batida, envia e-mail se habilitado.
      */
-    private int sincronizarBatidasInterno(LogSincronizacao log_sync) {
-        // Descobre o maior NSR já no banco
+    private int sincronizarBatidasInterno(LogSincronizacao ls) {
         Long ultimoNsr = batidaRepo.findMaxNsr().orElse(0L);
-        log.info("Sincronizando batidas. Último NSR no banco: {}", ultimoNsr);
+        log.info("Sincronizando batidas. Ultimo NSR no banco: {}",
+                ultimoNsr);
 
-        // Busca do relógio a partir do próximo NSR
-        AfdResponseDTO afd = punchLogService.buscarBatidas(ultimoNsr + 1);
+        AfdResponseDTO afd =
+                punchLogService.buscarBatidas(ultimoNsr + 1);
 
-        if (afd == null || afd.getBatidas() == null || afd.getBatidas().isEmpty()) {
+        if (afd == null || afd.getBatidas() == null
+                || afd.getBatidas().isEmpty()) {
             log.info("Nenhuma batida nova desde NSR {}.", ultimoNsr);
-            log_sync.setUltimoNsr(ultimoNsr);
+            ls.setUltimoNsr(ultimoNsr);
             return 0;
         }
 
@@ -180,8 +218,8 @@ public class SyncService {
         long maiorNsr = ultimoNsr;
 
         for (AfdLineDTO dto : afd.getBatidas()) {
-            // Garante que não há duplicatas (NSR é único)
             if (!batidaRepo.existsByNsr(dto.getNsr())) {
+
                 BatidaPonto entity = new BatidaPonto();
                 entity.setNsr(dto.getNsr());
                 entity.setPis(dto.getPis());
@@ -190,20 +228,62 @@ public class SyncService {
                 entity.setTipoDescricao(dto.getTipoDescricao());
                 entity.setLinhaOriginal(dto.getLinhaOriginal());
                 entity.setCriadoEm(LocalDateTime.now());
+                entity.setEmailEnviado(false);
 
                 batidaRepo.save(entity);
                 count++;
 
                 if (dto.getNsr() > maiorNsr) maiorNsr = dto.getNsr();
+
+                // Envia comprovante por e-mail
+                enviarComprovanteEmail(entity);
             }
         }
 
-        log_sync.setUltimoNsr(maiorNsr);
-        log.info("Batidas novas inseridas: {} | Maior NSR: {}", count, maiorNsr);
+        ls.setUltimoNsr(maiorNsr);
+        log.info("Batidas novas: {} | Maior NSR: {}", count, maiorNsr);
         return count;
     }
 
-    // ── Helpers de log ────────────────────────────────────────────────────
+    /**
+     * Envia comprovante por e-mail ao funcionário.
+     * Só envia se:
+     *   1. E-mail habilitado em /api/config
+     *   2. Funcionário tem e-mail cadastrado
+     * Marca email_enviado=true em ambos os casos para não repetir.
+     */
+    private void enviarComprovanteEmail(BatidaPonto batida) {
+        try {
+            if (!configService.isEmailHabilitado()) {
+                batida.setEmailEnviado(true);
+                batidaRepo.save(batida);
+                return;
+            }
+
+            usuarioRepo.findByPisFormatado(batida.getPis())
+                    .ifPresentOrElse(
+                        usuario -> {
+                            emailService.enviarComprovante(
+                                    batida, usuario);
+                            batida.setEmailEnviado(true);
+                            batidaRepo.save(batida);
+                        },
+                        () -> {
+                            log.debug("PIS {} sem cadastro.",
+                                    batida.getPis());
+                            batida.setEmailEnviado(true);
+                            batidaRepo.save(batida);
+                        }
+                    );
+        } catch (Exception e) {
+            log.warn("Erro ao enviar comprovante NSR {}: {}",
+                    batida.getNsr(), e.getMessage());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // HELPERS DE LOG
+    // ─────────────────────────────────────────────────────────────────────
 
     private LogSincronizacao iniciarLog(String tipo) {
         LogSincronizacao ls = new LogSincronizacao();
@@ -214,8 +294,9 @@ public class SyncService {
         return logRepo.save(ls);
     }
 
-    private LogSincronizacao finalizarLog(LogSincronizacao ls, String status,
-                                          int total, String mensagem) {
+    private LogSincronizacao finalizarLog(LogSincronizacao ls,
+                                           String status, int total,
+                                           String mensagem) {
         ls.setStatus(status);
         ls.setDataFim(LocalDateTime.now());
         ls.setTotalRegistros(total);

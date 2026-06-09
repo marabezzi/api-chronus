@@ -40,4 +40,7 @@ public interface BatidaPontoRepository extends JpaRepository<BatidaPonto, Long> 
      */
     List<BatidaPonto> findByDateTimeBetweenOrderByDateTimeAsc(
         LocalDateTime inicio, LocalDateTime fim);
+
+        /** Busca batidas novas que ainda não tiveram e-mail enviado */
+        List<BatidaPonto> findByEmailEnviadoFalse();
 }
