@@ -6,6 +6,6 @@ WORKDIR /app
 # Copia o jar pré-compilado da máquina host
 COPY target/api-chronus-0.0.1-SNAPSHOT.jar chronus.jar
 
-EXPOSE 8081
+EXPOSE 8111
 
 ENTRYPOINT ["java", "-jar", "chronus.jar"]
